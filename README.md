@@ -2,6 +2,8 @@
   <img src="media/logo.png" alt="nanollama" width="200">
 </p>
 
+---
+
 [![Python 3.13](https://img.shields.io/badge/python-3.13-blue.svg)](https://www.python.org/downloads/)
 [![GitHub stars](https://img.shields.io/github/stars/mrcloudchase/nanollama)](https://github.com/mrcloudchase/nanollama/stargazers)
 
