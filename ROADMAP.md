@@ -4,9 +4,19 @@ Features to add incrementally on top of the ~300-line starting point. Each item
 is a self-contained exercise that teaches a new concept. Ordered by complexity —
 start from the top and work your way down.
 
-**Current state:** Single-file `nanollama.py` with transformer forward pass,
-KV-cache, temperature sampling, HuggingFace weight loading, streaming output,
-and CLI args (`--model`, `--device`, `--temp`, `--max-tokens`).
+**Current state:** Phase 0 complete. Working on Phase 1.
+
+---
+
+## Phase 0: Core Inference (DONE)
+
+- [x] **Transformer architecture** — RMSNorm, RoPE, GQA, SwiGLU in pure PyTorch
+- [x] **KV-Cache** — Efficient autoregressive generation with cached key/value states
+- [x] **Temperature sampling** — Greedy (temp=0) and stochastic (temp>0) token selection
+- [x] **Weight loading** — Download and load HuggingFace safetensors with weight name mapping
+- [x] **Tokenizer** — Wrapper around HuggingFace AutoTokenizer
+- [x] **Streaming output** — Print tokens as they're generated with perf stats
+- [x] **CLI args** — `--prompt`, `--model`, `--device`, `--temp`, `--max-tokens` via argparse
 
 ---
 
