@@ -7,7 +7,7 @@
 [![Python 3.13](https://img.shields.io/badge/python-3.13-blue.svg)](https://www.python.org/downloads/)
 [![GitHub stars](https://img.shields.io/github/stars/mrcloudchase/nanollama)](https://github.com/mrcloudchase/nanollama/stargazers)
 
-An educational LLM inference engine in ~300 lines of PyTorch.
+An educational LLM inference engine in ~400 lines of PyTorch.
 
 nanollama is a single-file, from-scratch implementation of LLM inference. It loads a real model from HuggingFace, runs the full transformer forward pass, and generates text — all in code you can read top to bottom in one sitting.
 
@@ -62,7 +62,7 @@ See [docs/cli.md](docs/cli.md) for the full CLI reference, all flags, and exampl
 | Quantization | GGUF Q4/Q8/etc. | Float32 only |
 | Model format | GGUF | HuggingFace safetensors |
 | API server | Yes (OpenAI-compatible) | No |
-| Code size | ~100K lines | ~300 lines |
+| Code size | ~100K lines | ~400 lines |
 | Goal | Production inference | Learning |
 
 ## What's next

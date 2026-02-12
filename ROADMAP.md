@@ -1,6 +1,6 @@
 # nanollama Roadmap
 
-Features to add incrementally on top of the ~300-line starting point. Each item
+Features to add incrementally on top of the ~400-line starting point. Each item
 is a self-contained exercise that teaches a new concept. Ordered by complexity —
 start from the top and work your way down.
 

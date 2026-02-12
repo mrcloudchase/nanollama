@@ -1,5 +1,5 @@
 """
-nanollama.py — An educational LLM inference engine in ~300 lines of PyTorch.
+nanollama.py — An educational LLM inference engine in ~400 lines of PyTorch.
 
 Loads a LLaMA-architecture model from HuggingFace and generates text.
 Every component of the transformer is implemented from scratch so you
