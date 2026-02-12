@@ -32,17 +32,9 @@ uv pip install -r requirements.txt
 python nanollama.py --prompt "The meaning of life is"
 ```
 
-With options:
-
-```bash
-python nanollama.py --prompt "What is 2+2?" --temp 0              # greedy (deterministic)
-python nanollama.py --prompt "Once upon a time" --temp 1.5        # creative
-python nanollama.py --prompt "Hello" --max-tokens 50              # shorter output
-python nanollama.py --prompt "Hello" --device cpu                 # force CPU
-python nanollama.py --prompt "Hello" --model TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T  # base model
-```
-
 The first run downloads the model from HuggingFace. Subsequent runs use the cache.
+
+See [docs/cli.md](docs/cli.md) for the full CLI reference, all flags, and examples.
 
 ## Reading the code
 
