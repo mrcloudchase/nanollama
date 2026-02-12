@@ -2,7 +2,8 @@
 
 ```
 python nanollama.py --prompt PROMPT [--model MODEL] [--device DEVICE]
-                    [--temp TEMP] [--top-k TOP_K] [--max-tokens MAX_TOKENS]
+                    [--temp TEMP] [--top-k TOP_K] [--top-p TOP_P]
+                    [--max-tokens MAX_TOKENS]
 ```
 
 ## Required
@@ -19,6 +20,7 @@ python nanollama.py --prompt PROMPT [--model MODEL] [--device DEVICE]
 | `--device DEVICE` | auto-detected | Compute device: `cpu`, `cuda` (NVIDIA GPU), or `mps` (Apple Silicon). Auto-detection priority: cuda > mps > cpu |
 | `--temp TEMP` | `0.7` | Sampling temperature. Controls randomness: `0` = greedy (always pick the most likely token), `0.7` = balanced, `1.5` = creative. Higher values flatten the probability distribution |
 | `--top-k TOP_K` | `50` | Top-k filtering. Keep only the k most likely tokens before sampling. Set to `0` to disable. Lower values = more focused output |
+| `--top-p TOP_P` | `0.9` | Top-p (nucleus) sampling. Keep the smallest set of tokens whose cumulative probability exceeds p. Set to `1.0` to disable. Adapts to the distribution — fewer tokens when confident, more when uncertain |
 | `--max-tokens N` | `200` | Maximum number of tokens to generate. Generation stops early if the model produces an end-of-sequence token |
 
 ## Examples
@@ -45,6 +47,12 @@ Restrictive sampling (only top 10 tokens considered):
 
 ```bash
 python nanollama.py --prompt "Hello" --top-k 10
+```
+
+Tight nucleus sampling (only tokens in the top 80% probability mass):
+
+```bash
+python nanollama.py --prompt "Hello" --top-p 0.8
 ```
 
 Short output on CPU:

@@ -44,7 +44,7 @@ start from the top and work your way down.
     [prefill: 6 tok @ 28 t/s | decode: 29 tok @ 10.6 t/s]
     ```
 
-- [ ] **Top-p (nucleus) sampling** — Keep the smallest set of tokens whose
+- [x] **Top-p (nucleus) sampling** — Keep the smallest set of tokens whose
   cumulative probability exceeds p. Unlike top-k, this adapts to the shape
   of the distribution — fewer tokens when confident, more when uncertain.
   - *What you'll learn*: Cumulative distributions, adaptive filtering,

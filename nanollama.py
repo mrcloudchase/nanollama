@@ -248,7 +248,7 @@ def load_model(model_id: str, device: str = "cpu"):
 # ── Generation ────────────────────────────────────────────────────────────
 
 def generate(model, tokenizer, prompt: str, max_tokens: int = 200,
-             temperature: float = 0.7, top_k: int = 0):
+             temperature: float = 0.7, top_k: int = 0, top_p: float = 1.0):
     """Generate text from a prompt. Streams tokens to stdout."""
     device = next(model.parameters()).device
     ids = [tokenizer.bos_token_id] + tokenizer.encode(prompt, add_special_tokens=False)
@@ -271,6 +271,17 @@ def generate(model, tokenizer, prompt: str, max_tokens: int = 200,
         if top_k > 0:
             top_values, _ = torch.topk(logits, min(top_k, logits.size(-1)))
             logits[logits < top_values[:, -1, None]] = float("-inf")
+        # Top-p (nucleus): keep the smallest set of tokens whose cumulative
+        # probability exceeds p. Unlike top-k which always keeps a fixed count,
+        # top-p adapts — fewer tokens when confident, more when uncertain.
+        if top_p < 1.0:
+            sorted_logits, sorted_idx = torch.sort(logits, descending=True)
+            cumulative_probs = torch.softmax(sorted_logits, dim=-1).cumsum(dim=-1)
+            # Remove tokens whose cumulative probability is above the threshold,
+            # but always keep at least one token (shift right by 1)
+            remove = cumulative_probs - torch.softmax(sorted_logits, dim=-1) >= top_p
+            sorted_logits[remove] = float("-inf")
+            logits = sorted_logits.scatter(-1, sorted_idx.argsort(-1), sorted_logits)
         return torch.multinomial(F.softmax(logits, dim=-1), 1).item()
 
     # First generated token
@@ -315,6 +326,7 @@ if __name__ == "__main__":
     parser.add_argument("--device", default=None, help="cpu, cuda, or mps (auto-detected)")
     parser.add_argument("--temp", type=float, default=0.7, help="sampling temperature (default: 0.7)")
     parser.add_argument("--top-k", type=int, default=50, help="top-k filtering: keep k most likely tokens, 0=disabled (default: 50)")
+    parser.add_argument("--top-p", type=float, default=0.9, help="top-p nucleus sampling threshold, 1.0=disabled (default: 0.9)")
     parser.add_argument("--max-tokens", type=int, default=200, help="max tokens to generate (default: 200)")
     args = parser.parse_args()
 
@@ -324,4 +336,4 @@ if __name__ == "__main__":
 
     model, tokenizer = load_model(args.model, device)
     print()
-    generate(model, tokenizer, args.prompt, args.max_tokens, args.temp, args.top_k)
+    generate(model, tokenizer, args.prompt, args.max_tokens, args.temp, args.top_k, args.top_p)
