@@ -1,10 +1,7 @@
 # nanollama
 
 [![Python 3.13](https://img.shields.io/badge/python-3.13-blue.svg)](https://www.python.org/downloads/)
-[![PyTorch](https://img.shields.io/badge/PyTorch-2.10+-ee4c2c.svg)](https://pytorch.org/)
-[![Code Style: Single File](https://img.shields.io/badge/code-~300%20lines-brightgreen.svg)](nanollama.py)
 [![GitHub stars](https://img.shields.io/github/stars/mrcloudchase/nanollama)](https://github.com/mrcloudchase/nanollama/stargazers)
-[![GitHub last commit](https://img.shields.io/github/last-commit/mrcloudchase/nanollama)](https://github.com/mrcloudchase/nanollama/commits/main)
 
 An educational LLM inference engine in ~300 lines of PyTorch.
 
