@@ -69,6 +69,9 @@ class RMSNorm(nn.Module):
 # Encodes position by rotating pairs of dimensions. The dot product of two
 # rotated vectors depends only on their RELATIVE position — this gives the
 # model translation-invariant position awareness.
+# LLaMA uses "split-half" pairing: dimension pairs are (d, d+dim//2) rather
+# than interleaved (d, d+1). The rotation is: [x1*cos - x2*sin, x2*cos + x1*sin]
+# where x1 is the first half of dimensions and x2 is the second half.
 
 def precompute_rope(dim: int, max_seq: int, theta: float = 10000.0):
     """Build cos/sin tables. Each dimension-pair gets a different frequency."""
@@ -80,15 +83,15 @@ def precompute_rope(dim: int, max_seq: int, theta: float = 10000.0):
 def apply_rope(q, k, cos, sin, pos):
     """Rotate q and k by position-dependent angles."""
     seq = q.shape[1]
-    cos = cos[pos:pos + seq].unsqueeze(0).unsqueeze(2)
+    cos = cos[pos:pos + seq].unsqueeze(0).unsqueeze(2)  # [1, seq, 1, dim//2]
     sin = sin[pos:pos + seq].unsqueeze(0).unsqueeze(2)
 
     def rotate(x):
-        pairs = x.float().reshape(*x.shape[:-1], -1, 2)
-        even, odd = pairs[..., 0], pairs[..., 1]
-        out = torch.stack([even * cos - odd * sin,
-                           even * sin + odd * cos], dim=-1)
-        return out.reshape(x.shape).type_as(x)
+        x = x.float()
+        half = x.shape[-1] // 2
+        x1, x2 = x[..., :half], x[..., half:]
+        return torch.cat([x1 * cos - x2 * sin,
+                          x2 * cos + x1 * sin], dim=-1).type_as(q)
 
     return rotate(q), rotate(k)
 
@@ -245,14 +248,31 @@ def load_model(model_id: str, device: str = "cpu"):
     return model, tokenizer
 
 
+# ── Chat Template ─────────────────────────────────────────────────────────
+# Chat-tuned models are fine-tuned on text with special role markers like
+# <|user|> and <|assistant|>. Without these markers, the model doesn't know
+# it should "respond" — it just continues the text like autocomplete.
+# TinyLlama uses the ChatML format. Other models use different formats
+# (Llama, Alpaca, etc.) — see ROADMAP.md for Jinja2 template support.
+
+CHATML_TEMPLATE = "<|user|>\n{prompt}</s>\n<|assistant|>\n"
+
+
+def apply_chat_template(prompt: str) -> str:
+    """Wrap a user message in ChatML format."""
+    return CHATML_TEMPLATE.format(prompt=prompt)
+
+
 # ── Generation ────────────────────────────────────────────────────────────
 
 def generate(model, tokenizer, prompt: str, max_tokens: int = 200,
              temperature: float = 0.7, top_k: int = 0, top_p: float = 1.0,
-             repeat_penalty: float = 1.0):
+             repeat_penalty: float = 1.0, add_bos: bool = True):
     """Generate text from a prompt. Streams tokens to stdout."""
     device = next(model.parameters()).device
-    ids = [tokenizer.bos_token_id] + tokenizer.encode(prompt, add_special_tokens=False)
+    ids = tokenizer.encode(prompt, add_special_tokens=False)
+    if add_bos:
+        ids = [tokenizer.bos_token_id] + ids
     tokens = torch.tensor([ids], dtype=torch.long, device=device)
     model.reset()
 
@@ -263,6 +283,7 @@ def generate(model, tokenizer, prompt: str, max_tokens: int = 200,
     t_prefill = time.perf_counter() - t0
 
     def sample(logits, token_history):
+        logits = logits.clone()
         # Repetition penalty: discourage tokens that already appeared.
         # Positive logits are divided by the penalty (reduced probability),
         # negative logits are multiplied (made more negative). This always
@@ -292,7 +313,7 @@ def generate(model, tokenizer, prompt: str, max_tokens: int = 200,
             # but always keep at least one token (shift right by 1)
             remove = cumulative_probs - torch.softmax(sorted_logits, dim=-1) >= top_p
             sorted_logits[remove] = float("-inf")
-            logits = sorted_logits.scatter(-1, sorted_idx.argsort(-1), sorted_logits)
+            logits = torch.zeros_like(sorted_logits).scatter(-1, sorted_idx, sorted_logits)
         return torch.multinomial(F.softmax(logits, dim=-1), 1).item()
 
     # First generated token
@@ -340,6 +361,7 @@ if __name__ == "__main__":
     parser.add_argument("--top-p", type=float, default=0.9, help="top-p nucleus sampling threshold, 1.0=disabled (default: 0.9)")
     parser.add_argument("--repeat-penalty", type=float, default=1.1, help="repetition penalty: 1.0=off, 1.1=mild, 1.3=strong (default: 1.1)")
     parser.add_argument("--max-tokens", type=int, default=200, help="max tokens to generate (default: 200)")
+    parser.add_argument("--chat", action="store_true", help="wrap prompt in ChatML template for chat-tuned models")
     args = parser.parse_args()
 
     device = args.device or auto_device()
@@ -347,6 +369,12 @@ if __name__ == "__main__":
     print(f"Prompt: {args.prompt}\n")
 
     model, tokenizer = load_model(args.model, device)
+    if args.chat:
+        prompt = apply_chat_template(args.prompt)
+        add_bos = False  # Chat template doesn't use BOS
+    else:
+        prompt = args.prompt
+        add_bos = True
     print()
-    generate(model, tokenizer, args.prompt, args.max_tokens, args.temp, args.top_k,
-             args.top_p, args.repeat_penalty)
+    generate(model, tokenizer, prompt, args.max_tokens, args.temp, args.top_k,
+             args.top_p, args.repeat_penalty, add_bos)

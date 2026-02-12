@@ -1,7 +1,7 @@
 # CLI Reference
 
 ```
-python nanollama.py --prompt PROMPT [--model MODEL] [--device DEVICE]
+python nanollama.py --prompt PROMPT [--chat] [--model MODEL] [--device DEVICE]
                     [--temp TEMP] [--top-k TOP_K] [--top-p TOP_P]
                     [--repeat-penalty PENALTY] [--max-tokens MAX_TOKENS]
 ```
@@ -22,6 +22,7 @@ python nanollama.py --prompt PROMPT [--model MODEL] [--device DEVICE]
 | `--top-k TOP_K` | `50` | Top-k filtering. Keep only the k most likely tokens before sampling. Set to `0` to disable. Lower values = more focused output |
 | `--top-p TOP_P` | `0.9` | Top-p (nucleus) sampling. Keep the smallest set of tokens whose cumulative probability exceeds p. Set to `1.0` to disable. Adapts to the distribution — fewer tokens when confident, more when uncertain |
 | `--repeat-penalty P` | `1.1` | Repetition penalty. Reduces probability of tokens that already appeared. `1.0` = off, `1.1` = mild, `1.3` = strong |
+| `--chat` | off | Wrap the prompt in a ChatML template (`<\|user\|>`, `<\|assistant\|>` tags) so chat-tuned models respond as a conversation instead of continuing raw text |
 | `--max-tokens N` | `200` | Maximum number of tokens to generate. Generation stops early if the model produces an end-of-sequence token |
 
 ## Examples
@@ -30,6 +31,12 @@ Basic usage:
 
 ```bash
 python nanollama.py --prompt "The meaning of life is"
+```
+
+Chat mode (model responds as a conversation):
+
+```bash
+python nanollama.py --prompt "What is the capital of France?" --chat
 ```
 
 Greedy decoding (deterministic, always picks the highest probability token):

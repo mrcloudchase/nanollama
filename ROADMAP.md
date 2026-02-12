@@ -13,17 +13,18 @@ start from the top and work your way down.
 - [x] **Transformer architecture** — RMSNorm, RoPE, GQA, SwiGLU in pure PyTorch
 - [x] **KV-Cache** — Efficient autoregressive generation with cached key/value states
 - [x] **Temperature sampling** — Greedy (temp=0) and stochastic (temp>0) token selection
-  - Output sample (`--prompt "The meaning of life is"`):
+  - Output sample (`--prompt "The meaning of life is" --top-k 0 --top-p 1.0 --repeat-penalty 1.0`):
     ```
-    tobea.Arewhatis?Whatwouldlifeandtheistheoflifeandthemeaningto.
-    Thisisthemeaning2020
-    Iam
-    Livesisthemeaning,butours,andyouhaveallthemeaningarewe,orthethe1andlife,andIlikethetoandthewilltheinthe
-    theHandwhatsandthat
-    how."isaTheH,isyourofthetheAndisnothing,andallthehis,lovethe.
-    the.thathishavetoyouwhatofthathis.Bming.Andnowas.Inbeingin.beingthea,allthehave,areis,thinkso.,ess,ofin.Heseinessforthe.peopleareareintheIwereaesetheeseare.and.of,theyingthe.I.andinicalthe:thethearetheisetheisingaandthe
+    tobehappy,andhappinessistodowhatyoulove.Justtolovewhatyoudo.
 
-    [prefill: 6 tok @ 28 t/s | decode: 200 tok @ 10.1 t/s]
+    4."Youaretheonlyoneperfectinyourowneyes."bySylviaPlath-Thispoemis
+    abouttheimportanceofself-acceptanceandtheideathatweshouldonlyevercare
+    aboutwhatwedowithourownlives.
+
+    5."Loveistheonlythingthatmatters."byWilliamShakespeare-Thisquoteis
+    oftencitedasoneofthemostfamouslovepoemsinhistory...
+
+    [prefill: 6 tok @ 31 t/s | decode: 166 tok @ 9.8 t/s]
     ```
 - [x] **Weight loading** — Download and load HuggingFace safetensors with weight name mapping
 - [x] **Tokenizer** — Wrapper around HuggingFace AutoTokenizer
@@ -37,44 +38,74 @@ start from the top and work your way down.
 - [x] **Top-k filtering** — Keep only the k most likely tokens, discard the rest.
   Simplest way to remove garbage from the tail of the distribution.
   - *What you'll learn*: How filtering shapes token distributions, `torch.topk`.
-  - Output sample (`--prompt "The meaning of life is" --top-k 50`):
+  - Output sample (`--prompt "The meaning of life is" --top-k 50 --top-p 1.0 --repeat-penalty 1.0`):
     ```
-    tolivelifeasitislife.Itmakesiteasierforyoutoliveonthisistobe4meetheaven.</s>
+    tofindyourtruepassion,pursueit,andcreatealifethatmakesyouhappy.
+    5.TheArtofRacingintheRain6.TheFaultinOurStars7.TheHungerGames
+    Trilogy8.TheGiver9.TheNameoftheRose10.TheNightingale11.WeNeedto
+    TalkAboutKevin12.TheNightingale13.TheMothers14.TheHungerGames
+    15.TheMazeRunner16.TheMazeRunner17.TheGiver18.TheHungerGames...
 
-    [prefill: 6 tok @ 28 t/s | decode: 29 tok @ 10.6 t/s]
+    [prefill: 6 tok @ 36 t/s | decode: 200 tok @ 10.0 t/s]
     ```
+    Coherent start, but gets stuck in repetitive loops — motivating top-p and
+    repetition penalty.
 
 - [x] **Top-p (nucleus) sampling** — Keep the smallest set of tokens whose
   cumulative probability exceeds p. Unlike top-k, this adapts to the shape
   of the distribution — fewer tokens when confident, more when uncertain.
   - *What you'll learn*: Cumulative distributions, adaptive filtering,
     why top-p often beats top-k.
-  - Output sample (`--prompt "The meaning of life is" --top-p 0.9`):
+  - Output sample (`--prompt "The meaning of life is" --top-k 50 --top-p 0.9 --repeat-penalty 1.0`):
     ```
-    tolivelifeasitislife.Itmakesiteasierforyoutoliveonthisistobe4meetheaven.</s>
+    tofindyourpassion,pursueitwithallyourmight,andleavealegacy.Thisis
+    aquotefromthemovie"TheSocialNetwork"anditperfectlyencapsulatesthe
+    ideathatfindingyourpurposeisoneofthemostimportantthingsyoucandoin
+    life.It'snotaboutfindingajoboracareer,butratherfindingsomething
+    thatyoulovedoinganddevotingyourlifetoit.Thisquotecaninspireusto
+    findourpassionandpursueitwithallourmight,knowingthatwewillleave
+    alastinglegacybehind.</s>
 
-    [prefill: 6 tok @ 28 t/s | decode: 29 tok @ 10.6 t/s]
+    [prefill: 6 tok @ 28 t/s | decode: 115 tok @ 9.9 t/s]
     ```
+    With top-p layered on, output stays varied and stops naturally at EOS.
 
 - [x] **Repetition penalty** — Reduce the probability of tokens that already
   appeared. Prevents the model from getting stuck in loops.
   - *What you'll learn*: Post-hoc logit manipulation, the repetition problem
     in autoregressive models.
-  - Output sample (`--prompt "The meaning of life is" --repeat-penalty 0.9`):
+  - Output sample (`--prompt "The meaning of life is" --repeat-penalty 1.1`):
     ```
-    /0<s>/0104/0////7>0//60</s>
+    tofindyourgift.Donotfollowyourlotinlaworfortune.Followyourgift;
+    andyouwillfindenoughforallneeds.
+    Thepoem"TheGift"byWaltWhitmanhasbeeninterpreteddifferentlyfrom
+    differentperspectives.Somebelievethatthepoemisametaphorforfinding
+    one'struepurposeinlife,whileothersviewitasastatementaboutthe
+    importanceoffindingourcallinginlife.Nomatterwhatinterpretationone
+    choosestogivethepoem,itsmessageremainsclear-findyourgiftandpursue
+    itwithallyourheart.</s>
 
-    [prefill: 6 tok @ 28 t/s | decode: 29 tok @ 10.6 t/s]
+    [prefill: 6 tok @ 56 t/s | decode: 118 tok @ 8.8 t/s]
     ```
+    Combined with top-k and top-p (defaults), repetition penalty produces
+    clean, non-repetitive output that terminates naturally.
 
 ---
 
 ## Phase 2: Chat & Interaction
 
-- [ ] **Chat template** — Wrap user input in the model's expected chat format
+- [x] **Chat template** — Wrap user input in the model's expected chat format
   (e.g., ChatML's `<|user|>`, `<|assistant|>` tags) so chat-tuned models
   respond properly instead of continuing raw text.
   - *What you'll learn*: Why prompt format matters, how chat fine-tuning works.
+  - Output sample (`--prompt "What is the capital of France?" --chat`):
+    ```
+    ThecapitalofFranceisParis.</s>
+
+    [prefill: 23 tok @ 142 t/s | decode: 8 tok @ 8.5 t/s]
+    ```
+    With the chat template, the model gives a direct answer instead of
+    continuing raw text.
 
 - [ ] **Interactive mode** — A REPL loop: prompt → generate → prompt → ...
   with `--interactive` flag.
