@@ -247,7 +247,8 @@ def load_model(model_id: str, device: str = "cpu"):
 
 # ── Generation ────────────────────────────────────────────────────────────
 
-def generate(model, tokenizer, prompt: str, max_tokens: int = 200, temperature: float = 0.7):
+def generate(model, tokenizer, prompt: str, max_tokens: int = 200,
+             temperature: float = 0.7, top_k: int = 0):
     """Generate text from a prompt. Streams tokens to stdout."""
     device = next(model.parameters()).device
     ids = [tokenizer.bos_token_id] + tokenizer.encode(prompt, add_special_tokens=False)
@@ -261,9 +262,16 @@ def generate(model, tokenizer, prompt: str, max_tokens: int = 200, temperature: 
     t_prefill = time.perf_counter() - t0
 
     def sample(logits):
-        if temperature > 0:
-            return torch.multinomial(F.softmax(logits / temperature, dim=-1), 1).item()
-        return logits.argmax(-1).item()
+        if temperature == 0:
+            return logits.argmax(-1).item()
+        logits = logits / temperature
+        # Top-k: keep only the k highest logits, set the rest to -inf.
+        # This removes the long tail of unlikely tokens before sampling,
+        # preventing the model from occasionally picking nonsense tokens.
+        if top_k > 0:
+            top_values, _ = torch.topk(logits, min(top_k, logits.size(-1)))
+            logits[logits < top_values[:, -1, None]] = float("-inf")
+        return torch.multinomial(F.softmax(logits, dim=-1), 1).item()
 
     # First generated token
     next_id = sample(logits[:, -1])
@@ -306,6 +314,7 @@ if __name__ == "__main__":
                         help="HuggingFace model ID or local path")
     parser.add_argument("--device", default=None, help="cpu, cuda, or mps (auto-detected)")
     parser.add_argument("--temp", type=float, default=0.7, help="sampling temperature (default: 0.7)")
+    parser.add_argument("--top-k", type=int, default=50, help="top-k filtering: keep k most likely tokens, 0=disabled (default: 50)")
     parser.add_argument("--max-tokens", type=int, default=200, help="max tokens to generate (default: 200)")
     args = parser.parse_args()
 
@@ -315,4 +324,4 @@ if __name__ == "__main__":
 
     model, tokenizer = load_model(args.model, device)
     print()
-    generate(model, tokenizer, args.prompt, args.max_tokens, args.temp)
+    generate(model, tokenizer, args.prompt, args.max_tokens, args.temp, args.top_k)

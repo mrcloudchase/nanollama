@@ -22,7 +22,7 @@ start from the top and work your way down.
 
 ## Phase 1: Better Sampling
 
-- [ ] **Top-k filtering** — Keep only the k most likely tokens, discard the rest.
+- [x] **Top-k filtering** — Keep only the k most likely tokens, discard the rest.
   Simplest way to remove garbage from the tail of the distribution.
   - *What you'll learn*: How filtering shapes token distributions, `torch.topk`.
 
