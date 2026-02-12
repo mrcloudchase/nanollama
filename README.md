@@ -26,7 +26,9 @@ By reading `nanollama.py`, you'll understand:
 ## Quick start
 
 ```bash
-pip install -r requirements.txt
+uv venv
+source .venv/bin/activate
+uv pip install -r requirements.txt
 python nanollama.py --prompt "The meaning of life is"
 ```
 
