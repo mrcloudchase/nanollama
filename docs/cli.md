@@ -3,7 +3,7 @@
 ```
 python nanollama.py --prompt PROMPT [--model MODEL] [--device DEVICE]
                     [--temp TEMP] [--top-k TOP_K] [--top-p TOP_P]
-                    [--max-tokens MAX_TOKENS]
+                    [--repeat-penalty PENALTY] [--max-tokens MAX_TOKENS]
 ```
 
 ## Required
@@ -21,6 +21,7 @@ python nanollama.py --prompt PROMPT [--model MODEL] [--device DEVICE]
 | `--temp TEMP` | `0.7` | Sampling temperature. Controls randomness: `0` = greedy (always pick the most likely token), `0.7` = balanced, `1.5` = creative. Higher values flatten the probability distribution |
 | `--top-k TOP_K` | `50` | Top-k filtering. Keep only the k most likely tokens before sampling. Set to `0` to disable. Lower values = more focused output |
 | `--top-p TOP_P` | `0.9` | Top-p (nucleus) sampling. Keep the smallest set of tokens whose cumulative probability exceeds p. Set to `1.0` to disable. Adapts to the distribution — fewer tokens when confident, more when uncertain |
+| `--repeat-penalty P` | `1.1` | Repetition penalty. Reduces probability of tokens that already appeared. `1.0` = off, `1.1` = mild, `1.3` = strong |
 | `--max-tokens N` | `200` | Maximum number of tokens to generate. Generation stops early if the model produces an end-of-sequence token |
 
 ## Examples
@@ -53,6 +54,12 @@ Tight nucleus sampling (only tokens in the top 80% probability mass):
 
 ```bash
 python nanollama.py --prompt "Hello" --top-p 0.8
+```
+
+Strong repetition penalty to avoid loops:
+
+```bash
+python nanollama.py --prompt "Hello" --repeat-penalty 1.3
 ```
 
 Short output on CPU:

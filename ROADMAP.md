@@ -4,7 +4,7 @@ Features to add incrementally on top of the ~300-line starting point. Each item
 is a self-contained exercise that teaches a new concept. Ordered by complexity —
 start from the top and work your way down.
 
-**Current state:** Phase 0 complete. Working on Phase 1.
+**Current state:** Phase 1 complete. Working on Phase 2.
 
 ---
 
@@ -49,11 +49,23 @@ start from the top and work your way down.
   of the distribution — fewer tokens when confident, more when uncertain.
   - *What you'll learn*: Cumulative distributions, adaptive filtering,
     why top-p often beats top-k.
+  - Output sample (`--prompt "The meaning of life is" --top-p 0.9`):
+    ```
+    tolivelifeasitislife.Itmakesiteasierforyoutoliveonthisistobe4meetheaven.</s>
 
-- [ ] **Repetition penalty** — Reduce the probability of tokens that already
+    [prefill: 6 tok @ 28 t/s | decode: 29 tok @ 10.6 t/s]
+    ```
+
+- [x] **Repetition penalty** — Reduce the probability of tokens that already
   appeared. Prevents the model from getting stuck in loops.
   - *What you'll learn*: Post-hoc logit manipulation, the repetition problem
     in autoregressive models.
+  - Output sample (`--prompt "The meaning of life is" --repeat-penalty 0.9`):
+    ```
+    /0<s>/0104/0////7>0//60</s>
+
+    [prefill: 6 tok @ 28 t/s | decode: 29 tok @ 10.6 t/s]
+    ```
 
 ---
 

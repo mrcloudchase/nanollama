@@ -248,7 +248,8 @@ def load_model(model_id: str, device: str = "cpu"):
 # ── Generation ────────────────────────────────────────────────────────────
 
 def generate(model, tokenizer, prompt: str, max_tokens: int = 200,
-             temperature: float = 0.7, top_k: int = 0, top_p: float = 1.0):
+             temperature: float = 0.7, top_k: int = 0, top_p: float = 1.0,
+             repeat_penalty: float = 1.0):
     """Generate text from a prompt. Streams tokens to stdout."""
     device = next(model.parameters()).device
     ids = [tokenizer.bos_token_id] + tokenizer.encode(prompt, add_special_tokens=False)
@@ -261,7 +262,17 @@ def generate(model, tokenizer, prompt: str, max_tokens: int = 200,
         logits = model(tokens, start_pos=0)
     t_prefill = time.perf_counter() - t0
 
-    def sample(logits):
+    def sample(logits, token_history):
+        # Repetition penalty: discourage tokens that already appeared.
+        # Positive logits are divided by the penalty (reduced probability),
+        # negative logits are multiplied (made more negative). This always
+        # reduces the chance of repeating a token, regardless of sign.
+        if repeat_penalty != 1.0 and token_history:
+            for tid in set(token_history):
+                if logits[0, tid] > 0:
+                    logits[0, tid] /= repeat_penalty
+                else:
+                    logits[0, tid] *= repeat_penalty
         if temperature == 0:
             return logits.argmax(-1).item()
         logits = logits / temperature
@@ -285,7 +296,7 @@ def generate(model, tokenizer, prompt: str, max_tokens: int = 200,
         return torch.multinomial(F.softmax(logits, dim=-1), 1).item()
 
     # First generated token
-    next_id = sample(logits[:, -1])
+    next_id = sample(logits[:, -1], ids)
     generated = [next_id]
     print(tokenizer.decode([next_id]), end="", flush=True)
 
@@ -297,7 +308,7 @@ def generate(model, tokenizer, prompt: str, max_tokens: int = 200,
         inp = torch.tensor([[next_id]], dtype=torch.long, device=device)
         with torch.no_grad():
             logits = model(inp, start_pos=len(ids) + i - 1)
-        next_id = sample(logits[:, -1])
+        next_id = sample(logits[:, -1], ids + generated)
         generated.append(next_id)
         print(tokenizer.decode([next_id]), end="", flush=True)
     t_dec_total = time.perf_counter() - t_dec
@@ -327,6 +338,7 @@ if __name__ == "__main__":
     parser.add_argument("--temp", type=float, default=0.7, help="sampling temperature (default: 0.7)")
     parser.add_argument("--top-k", type=int, default=50, help="top-k filtering: keep k most likely tokens, 0=disabled (default: 50)")
     parser.add_argument("--top-p", type=float, default=0.9, help="top-p nucleus sampling threshold, 1.0=disabled (default: 0.9)")
+    parser.add_argument("--repeat-penalty", type=float, default=1.1, help="repetition penalty: 1.0=off, 1.1=mild, 1.3=strong (default: 1.1)")
     parser.add_argument("--max-tokens", type=int, default=200, help="max tokens to generate (default: 200)")
     args = parser.parse_args()
 
@@ -336,4 +348,5 @@ if __name__ == "__main__":
 
     model, tokenizer = load_model(args.model, device)
     print()
-    generate(model, tokenizer, args.prompt, args.max_tokens, args.temp, args.top_k, args.top_p)
+    generate(model, tokenizer, args.prompt, args.max_tokens, args.temp, args.top_k,
+             args.top_p, args.repeat_penalty)
