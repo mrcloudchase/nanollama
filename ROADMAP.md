@@ -13,6 +13,18 @@ start from the top and work your way down.
 - [x] **Transformer architecture** — RMSNorm, RoPE, GQA, SwiGLU in pure PyTorch
 - [x] **KV-Cache** — Efficient autoregressive generation with cached key/value states
 - [x] **Temperature sampling** — Greedy (temp=0) and stochastic (temp>0) token selection
+  - Output sample (`--prompt "The meaning of life is"`):
+    ```
+    tobea.Arewhatis?Whatwouldlifeandtheistheoflifeandthemeaningto.
+    Thisisthemeaning2020
+    Iam
+    Livesisthemeaning,butours,andyouhaveallthemeaningarewe,orthethe1andlife,andIlikethetoandthewilltheinthe
+    theHandwhatsandthat
+    how."isaTheH,isyourofthetheAndisnothing,andallthehis,lovethe.
+    the.thathishavetoyouwhatofthathis.Bming.Andnowas.Inbeingin.beingthea,allthehave,areis,thinkso.,ess,ofin.Heseinessforthe.peopleareareintheIwereaesetheeseare.and.of,theyingthe.I.andinicalthe:thethearetheisetheisingaandthe
+
+    [prefill: 6 tok @ 28 t/s | decode: 200 tok @ 10.1 t/s]
+    ```
 - [x] **Weight loading** — Download and load HuggingFace safetensors with weight name mapping
 - [x] **Tokenizer** — Wrapper around HuggingFace AutoTokenizer
 - [x] **Streaming output** — Print tokens as they're generated with perf stats
@@ -25,6 +37,12 @@ start from the top and work your way down.
 - [x] **Top-k filtering** — Keep only the k most likely tokens, discard the rest.
   Simplest way to remove garbage from the tail of the distribution.
   - *What you'll learn*: How filtering shapes token distributions, `torch.topk`.
+  - Output sample (`--prompt "The meaning of life is" --top-k 50`):
+    ```
+    tolivelifeasitislife.Itmakesiteasierforyoutoliveonthisistobe4meetheaven.</s>
+
+    [prefill: 6 tok @ 28 t/s | decode: 29 tok @ 10.6 t/s]
+    ```
 
 - [ ] **Top-p (nucleus) sampling** — Keep the smallest set of tokens whose
   cumulative probability exceeds p. Unlike top-k, this adapts to the shape
