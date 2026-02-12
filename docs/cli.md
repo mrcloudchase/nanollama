@@ -4,13 +4,15 @@
 python nanollama.py --prompt PROMPT [--chat] [--model MODEL] [--device DEVICE]
                     [--temp TEMP] [--top-k TOP_K] [--top-p TOP_P]
                     [--repeat-penalty PENALTY] [--max-tokens MAX_TOKENS]
+python nanollama.py --interactive [--model MODEL] [--device DEVICE] [...]
 ```
 
-## Required
+## Required (one of)
 
 | Flag | Description |
 |------|-------------|
 | `--prompt PROMPT` | The input text for the model to continue |
+| `--interactive` | Interactive REPL mode — type prompts, get responses, repeat. Implies `--chat` |
 
 ## Optional
 
@@ -37,6 +39,12 @@ Chat mode (model responds as a conversation):
 
 ```bash
 python nanollama.py --prompt "What is the capital of France?" --chat
+```
+
+Interactive REPL (type prompts, get responses, repeat):
+
+```bash
+python nanollama.py --interactive
 ```
 
 Greedy decoding (deterministic, always picks the highest probability token):

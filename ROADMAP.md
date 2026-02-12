@@ -119,9 +119,20 @@ start from the top and work your way down.
     With the chat template, the model gives a direct answer instead of
     continuing raw text.
 
-- [ ] **Interactive mode** — A REPL loop: prompt → generate → prompt → ...
+- [x] **Interactive mode** — A REPL loop: prompt → generate → prompt → ...
   with `--interactive` flag.
   - *What you'll learn*: Building simple CLI interfaces, user input handling.
+  - Output sample (`--interactive`):
+    ```
+    Interactive mode — type a message, press Enter to generate.
+    Press Ctrl+C or type /exit to quit.
+
+    > What is the capital of France?
+    The capital city of France is Paris.
+
+    > Who wrote Romeo and Juliet?
+    Romeo and Juliet was written by William Shakespeare in 1597.
+    ```
 
 - [ ] **Jinja2 chat templates** — Load chat templates from the model's
   `tokenizer_config.json` instead of hardcoding. This is how HuggingFace and

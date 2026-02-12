@@ -358,7 +358,7 @@ def auto_device() -> str:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="nanollama — educational LLM inference")
-    parser.add_argument("--prompt", required=True, help="input prompt")
+    parser.add_argument("--prompt", default=None, help="input prompt")
     parser.add_argument("--model", default="TinyLlama/TinyLlama-1.1B-Chat-v1.0",
                         help="HuggingFace model ID or local path")
     parser.add_argument("--device", default=None, help="cpu, cuda, or mps (auto-detected)")
@@ -368,19 +368,47 @@ if __name__ == "__main__":
     parser.add_argument("--repeat-penalty", type=float, default=1.1, help="repetition penalty: 1.0=off, 1.1=mild, 1.3=strong (default: 1.1)")
     parser.add_argument("--max-tokens", type=int, default=200, help="max tokens to generate (default: 200)")
     parser.add_argument("--chat", action="store_true", help="wrap prompt in ChatML template for chat-tuned models")
+    parser.add_argument("--interactive", action="store_true", help="interactive REPL mode (implies --chat)")
     args = parser.parse_args()
 
-    device = args.device or auto_device()
-    print(f"Device: {device}")
-    print(f"Prompt: {args.prompt}\n")
+    if not args.interactive and not args.prompt:
+        parser.error("--prompt is required (unless using --interactive)")
 
+    device = args.device or auto_device()
     model, tokenizer = load_model(args.model, device)
-    if args.chat:
-        prompt = apply_chat_template(args.prompt)
-        add_bos = False  # Chat template doesn't use BOS
+
+    sampling = dict(max_tokens=args.max_tokens, temperature=args.temp,
+                    top_k=args.top_k, top_p=args.top_p,
+                    repeat_penalty=args.repeat_penalty)
+
+    if args.interactive:
+        # REPL loop: read prompt, generate, repeat. Implies --chat.
+        print(f"\nDevice: {device}")
+        print("Interactive mode — type a message, press Enter to generate.")
+        print("Press Ctrl+C or type /exit to quit.\n")
+        try:
+            while True:
+                try:
+                    user_input = input("> ")
+                except EOFError:
+                    break
+                if not user_input.strip():
+                    continue
+                if user_input.strip() == "/exit":
+                    break
+                prompt = apply_chat_template(user_input)
+                generate(model, tokenizer, prompt, add_bos=False, **sampling)
+                print()
+        except KeyboardInterrupt:
+            print()
     else:
-        prompt = args.prompt
-        add_bos = True
-    print()
-    generate(model, tokenizer, prompt, args.max_tokens, args.temp, args.top_k,
-             args.top_p, args.repeat_penalty, add_bos)
+        print(f"Device: {device}")
+        print(f"Prompt: {args.prompt}\n")
+        if args.chat:
+            prompt = apply_chat_template(args.prompt)
+            add_bos = False
+        else:
+            prompt = args.prompt
+            add_bos = True
+        print()
+        generate(model, tokenizer, prompt, add_bos=add_bos, **sampling)
