@@ -15,16 +15,17 @@ start from the top and work your way down.
 - [x] **Temperature sampling** — Greedy (temp=0) and stochastic (temp>0) token selection
   - Output sample (`--prompt "The meaning of life is" --top-k 0 --top-p 1.0 --repeat-penalty 1.0`):
     ```
-    tobehappy,andhappinessistodowhatyoulove.Justtolovewhatyoudo.
+    to find your purpose, and your purpose is to make a difference in
+    the world.
 
-    4."Youaretheonlyoneperfectinyourowneyes."bySylviaPlath-Thispoemis
-    abouttheimportanceofself-acceptanceandtheideathatweshouldonlyevercare
-    aboutwhatwedowithourownlives.
+    2. Life is a journey, not a destination: This line comes from the
+    movie "Into the Woods" and is a great reminder that life is a
+    rollercoaster ride with ups and downs.
 
-    5."Loveistheonlythingthatmatters."byWilliamShakespeare-Thisquoteis
-    oftencitedasoneofthemostfamouslovepoemsinhistory...
+    3. The present moment: This line comes from the song "My Heart Will
+    Go On" and is a great reminder to live in the present moment...
 
-    [prefill: 6 tok @ 31 t/s | decode: 166 tok @ 9.8 t/s]
+    [prefill: 6 tok @ 29 t/s | decode: 200 tok @ 8.9 t/s]
     ```
 - [x] **Weight loading** — Download and load HuggingFace safetensors with weight name mapping
 - [x] **Tokenizer** — Wrapper around HuggingFace AutoTokenizer
@@ -40,16 +41,33 @@ start from the top and work your way down.
   - *What you'll learn*: How filtering shapes token distributions, `torch.topk`.
   - Output sample (`--prompt "The meaning of life is" --top-k 50 --top-p 1.0 --repeat-penalty 1.0`):
     ```
-    tofindyourtruepassion,pursueit,andcreatealifethatmakesyouhappy.
-    5.TheArtofRacingintheRain6.TheFaultinOurStars7.TheHungerGames
-    Trilogy8.TheGiver9.TheNameoftheRose10.TheNightingale11.WeNeedto
-    TalkAboutKevin12.TheNightingale13.TheMothers14.TheHungerGames
-    15.TheMazeRunner16.TheMazeRunner17.TheGiver18.TheHungerGames...
+    not just a question of finding the right job, home or partner. It's
+    also about living the present moment to its fullest potential.
 
-    [prefill: 6 tok @ 36 t/s | decode: 200 tok @ 10.0 t/s]
+    2. You are here to learn and grow. The journey is as important as
+    the destination.
+
+    3. Life is not about being rich or famous but about embracing the
+    present and living the life you were born to live.
+
+    4. The path to happiness is not by seeking it, but by being content
+    with where you are, doing what you do, and being grateful for the
+    experience.
+
+    5. Life is about living your dreams, not waiting for them to happen.
+
+    6. The greatest wealth is that which comes from within, and the most
+    valuable possession is your mind.
+
+    7. Life is a journey, not a destination. The key to success is to
+    keep moving forward even when things seem challenging.
+
+    8. The only thing that matters in life is the quality of
+
+    [prefill: 6 tok @ 5 t/s | decode: 200 tok @ 10.0 t/s]
     ```
-    Coherent start, but gets stuck in repetitive loops — motivating top-p and
-    repetition penalty.
+    Coherent output, but without top-p or repetition penalty the model tends
+    to repeat patterns (numbered lists, similar phrasing).
 
 - [x] **Top-p (nucleus) sampling** — Keep the smallest set of tokens whose
   cumulative probability exceeds p. Unlike top-k, this adapts to the shape
@@ -58,17 +76,12 @@ start from the top and work your way down.
     why top-p often beats top-k.
   - Output sample (`--prompt "The meaning of life is" --top-k 50 --top-p 0.9 --repeat-penalty 1.0`):
     ```
-    tofindyourpassion,pursueitwithallyourmight,andleavealegacy.Thisis
-    aquotefromthemovie"TheSocialNetwork"anditperfectlyencapsulatesthe
-    ideathatfindingyourpurposeisoneofthemostimportantthingsyoucandoin
-    life.It'snotaboutfindingajoboracareer,butratherfindingsomething
-    thatyoulovedoinganddevotingyourlifetoit.Thisquotecaninspireusto
-    findourpassionandpursueitwithallourmight,knowingthatwewillleave
-    alastinglegacybehind.</s>
+    to pursue your passion. If you can't find it, make it.
 
-    [prefill: 6 tok @ 28 t/s | decode: 115 tok @ 9.9 t/s]
+    [prefill: 6 tok @ 23 t/s | decode: 18 tok @ 10.3 t/s]
     ```
-    With top-p layered on, output stays varied and stops naturally at EOS.
+    With top-p layered on, the model produces concise output and stops
+    naturally at EOS instead of rambling through numbered lists.
 
 - [x] **Repetition penalty** — Reduce the probability of tokens that already
   appeared. Prevents the model from getting stuck in loops.
@@ -76,19 +89,18 @@ start from the top and work your way down.
     in autoregressive models.
   - Output sample (`--prompt "The meaning of life is" --repeat-penalty 1.1`):
     ```
-    tofindyourgift.Donotfollowyourlotinlaworfortune.Followyourgift;
-    andyouwillfindenoughforallneeds.
-    Thepoem"TheGift"byWaltWhitmanhasbeeninterpreteddifferentlyfrom
-    differentperspectives.Somebelievethatthepoemisametaphorforfinding
-    one'struepurposeinlife,whileothersviewitasastatementaboutthe
-    importanceoffindingourcallinginlife.Nomatterwhatinterpretationone
-    choosestogivethepoem,itsmessageremainsclear-findyourgiftandpursue
-    itwithallyourheart.</s>
+    to be yourself in every way, while the purpose of existence is to
+    live your truth. 5. "I am not a slave, but I have become one" The
+    meaning of life is to find oneself and not to be found. These quotes
+    from famous people on finding self-identity are inspirational and
+    thought-provoking. They remind us that we all have our own unique
+    journey towards self-discovery, and that we should celebrate our
+    differences.
 
-    [prefill: 6 tok @ 56 t/s | decode: 118 tok @ 8.8 t/s]
+    [prefill: 6 tok @ 52 t/s | decode: 97 tok @ 9.1 t/s]
     ```
     Combined with top-k and top-p (defaults), repetition penalty produces
-    clean, non-repetitive output that terminates naturally.
+    varied, non-repetitive output that terminates naturally.
 
 ---
 
@@ -100,9 +112,9 @@ start from the top and work your way down.
   - *What you'll learn*: Why prompt format matters, how chat fine-tuning works.
   - Output sample (`--prompt "What is the capital of France?" --chat`):
     ```
-    ThecapitalofFranceisParis.</s>
+    The capital of France is Paris.
 
-    [prefill: 23 tok @ 142 t/s | decode: 8 tok @ 8.5 t/s]
+    [prefill: 23 tok @ 113 t/s | decode: 8 tok @ 9.5 t/s]
     ```
     With the chat template, the model gives a direct answer instead of
     continuing raw text.

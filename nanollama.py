@@ -319,7 +319,10 @@ def generate(model, tokenizer, prompt: str, max_tokens: int = 200,
     # First generated token
     next_id = sample(logits[:, -1], ids)
     generated = [next_id]
-    print(tokenizer.decode([next_id]), end="", flush=True)
+    prev_text = ""
+    text = tokenizer.decode(generated, skip_special_tokens=True)
+    print(text, end="", flush=True)
+    prev_text = text
 
     # Decode: generate one token at a time using KV cache
     t_dec = time.perf_counter()
@@ -331,7 +334,10 @@ def generate(model, tokenizer, prompt: str, max_tokens: int = 200,
             logits = model(inp, start_pos=len(ids) + i - 1)
         next_id = sample(logits[:, -1], ids + generated)
         generated.append(next_id)
-        print(tokenizer.decode([next_id]), end="", flush=True)
+        # Decode full sequence to get correct spacing from the tokenizer
+        text = tokenizer.decode(generated, skip_special_tokens=True)
+        print(text[len(prev_text):], end="", flush=True)
+        prev_text = text
     t_dec_total = time.perf_counter() - t_dec
 
     n_gen = len(generated)
