@@ -1,7 +1,13 @@
-# nanollama
+<p align="center">
+  <img src="media/logo.png" alt="nanollama" width="200">
+</p>
 
-[![Python 3.13](https://img.shields.io/badge/python-3.13-blue.svg)](https://www.python.org/downloads/)
-[![GitHub stars](https://img.shields.io/github/stars/mrcloudchase/nanollama)](https://github.com/mrcloudchase/nanollama/stargazers)
+<h1 align="center">nanollama</h1>
+
+<p align="center">
+  <a href="https://www.python.org/downloads/"><img src="https://img.shields.io/badge/python-3.13-blue.svg" alt="Python 3.13"></a>
+  <a href="https://github.com/mrcloudchase/nanollama/stargazers"><img src="https://img.shields.io/github/stars/mrcloudchase/nanollama" alt="GitHub stars"></a>
+</p>
 
 An educational LLM inference engine in ~300 lines of PyTorch.
 
