@@ -391,6 +391,7 @@ if __name__ == "__main__":
     parser.add_argument("--max-tokens", type=int, default=200, help="max tokens to generate (default: 200)")
     parser.add_argument("--chat", action="store_true", help="wrap prompt in ChatML template for chat-tuned models")
     parser.add_argument("--interactive", action="store_true", help="interactive REPL mode (implies --chat)")
+    parser.add_argument("--system", default=None, help="system prompt to steer model behavior (used with --chat or --interactive)")
     args = parser.parse_args()
 
     if not args.interactive and not args.prompt:
@@ -412,6 +413,8 @@ if __name__ == "__main__":
         print("Interactive mode — type a message, press Enter to generate.")
         print("Press Ctrl+C or type /exit to quit.\n")
         history: list[dict] = []
+        if args.system:
+            history.append({"role": "system", "content": args.system})
         try:
             while True:
                 try:
@@ -439,7 +442,10 @@ if __name__ == "__main__":
         print(f"Device: {device}")
         print(f"Prompt: {args.prompt}\n")
         if args.chat:
-            messages = [{"role": "user", "content": args.prompt}]
+            messages = []
+            if args.system:
+                messages.append({"role": "system", "content": args.system})
+            messages.append({"role": "user", "content": args.prompt})
             prompt = apply_chat_template(messages, tokenizer)
             add_bos = False
         else:

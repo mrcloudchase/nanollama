@@ -4,7 +4,7 @@ Features to add incrementally on top of the ~400-line starting point. Each item
 is a self-contained exercise that teaches a new concept. Ordered by complexity —
 start from the top and work your way down.
 
-**Current state:** Phase 1 complete. Working on Phase 2.
+**Current state:** Phase 2 complete. Working on Phase 3.
 
 ---
 
@@ -165,8 +165,17 @@ start from the top and work your way down.
     conversation, not just the latest message. Oldest turns are
     dropped when the context window fills up.
 
-- [ ] **System prompts** — Allow custom system prompts via `--system` flag.
+- [x] **System prompts** — Allow custom system prompts via `--system` flag.
   - *What you'll learn*: How system prompts steer model behavior.
+  - Output sample (`--prompt "Hello" --chat --system "You are a pirate."`):
+    ```
+    Rendered template:
+    <|system|>\nYou are a pirate.</s>\n<|user|>\nHello</s>\n<|assistant|>\n
+
+    [prefill: 45 tok — system message adds tokens to the context]
+    ```
+    Works with both `--chat` and `--interactive`. In interactive mode,
+    the system prompt persists across all turns.
 
 ---
 

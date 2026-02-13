@@ -53,3 +53,16 @@ Everything is in `nanollama.py`, organized top-to-bottom as a dependency chain:
 ## When adding features
 
 Check ROADMAP.md first — features are tracked there with checkboxes. After implementing one, mark it `[x]` in the roadmap and update the "Current state" line at the top. Keep the code educational with concise inline comments explaining the "why."
+
+## Git Workflow
+
+```bash
+# Commit changes
+git add <files>
+git commit -m <commit message>
+
+# Push to remote
+git push
+```
+
+Always commit and push without co-author tags. Keep commit messages concise — focus on the "why" rather than the "what".

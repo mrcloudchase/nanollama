@@ -25,6 +25,7 @@ python nanollama.py --interactive [--model MODEL] [--device DEVICE] [...]
 | `--top-p TOP_P` | `0.9` | Top-p (nucleus) sampling. Keep the smallest set of tokens whose cumulative probability exceeds p. Set to `1.0` to disable. Adapts to the distribution — fewer tokens when confident, more when uncertain |
 | `--repeat-penalty P` | `1.1` | Repetition penalty. Reduces probability of tokens that already appeared. `1.0` = off, `1.1` = mild, `1.3` = strong |
 | `--chat` | off | Wrap the prompt in a ChatML template (`<\|user\|>`, `<\|assistant\|>` tags) so chat-tuned models respond as a conversation instead of continuing raw text |
+| `--system PROMPT` | none | System prompt to steer model behavior. Used with `--chat` or `--interactive`. Persists across all turns in interactive mode |
 | `--max-tokens N` | `200` | Maximum number of tokens to generate. Generation stops early if the model produces an end-of-sequence token |
 
 ## Examples
@@ -45,6 +46,12 @@ Interactive REPL (type prompts, get responses, repeat):
 
 ```bash
 python nanollama.py --interactive
+```
+
+With a system prompt to steer behavior:
+
+```bash
+python nanollama.py --interactive --system "You are a helpful coding assistant."
 ```
 
 Greedy decoding (deterministic, always picks the highest probability token):
