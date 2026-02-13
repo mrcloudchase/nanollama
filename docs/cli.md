@@ -2,9 +2,11 @@
 
 ```
 python nanollama.py --prompt PROMPT [--chat] [--model MODEL] [--device DEVICE]
+                    [--dtype DTYPE] [--quantize Q8|Q4] [--compile]
                     [--temp TEMP] [--top-k TOP_K] [--top-p TOP_P]
                     [--repeat-penalty PENALTY] [--max-tokens MAX_TOKENS]
 python nanollama.py --interactive [--model MODEL] [--device DEVICE] [...]
+python nanollama.py --batch-file FILE [--chat] [--model MODEL] [...]
 ```
 
 ## Required (one of)
@@ -13,6 +15,7 @@ python nanollama.py --interactive [--model MODEL] [--device DEVICE] [...]
 |------|-------------|
 | `--prompt PROMPT` | The input text for the model to continue |
 | `--interactive` | Interactive REPL mode — type prompts, get responses, repeat. Implies `--chat` |
+| `--batch-file FILE` | File with one prompt per line for batched generation |
 
 ## Optional
 
@@ -27,6 +30,9 @@ python nanollama.py --interactive [--model MODEL] [--device DEVICE] [...]
 | `--chat` | off | Wrap the prompt in a ChatML template (`<\|user\|>`, `<\|assistant\|>` tags) so chat-tuned models respond as a conversation instead of continuing raw text |
 | `--system PROMPT` | none | System prompt to steer model behavior. Used with `--chat` or `--interactive`. Persists across all turns in interactive mode |
 | `--max-tokens N` | `200` | Maximum number of tokens to generate. Generation stops early if the model produces an end-of-sequence token |
+| `--dtype DTYPE` | `float32` | Model precision: `float32`, `float16`, or `bfloat16`. Half-precision halves memory and dramatically improves speed. Attention scores are always computed in float32 for numerical stability |
+| `--quantize Q` | none | Post-load weight quantization: `q8` (int8, ~4x memory savings) or `q4` (4-bit packed, ~8x savings). Weights are dequantized to float during each forward pass |
+| `--compile` | off | Use `torch.compile()` for automatic kernel fusion. First forward pass is slow (compilation), subsequent passes are faster |
 
 ## Examples
 
@@ -94,6 +100,36 @@ Using a different model:
 
 ```bash
 python nanollama.py --prompt "Hello" --model TinyLlama/TinyLlama-1.1B-Chat-v1.0
+```
+
+Half-precision for fast inference (recommended on GPU/MPS):
+
+```bash
+python nanollama.py --prompt "Hello" --chat --dtype float16
+```
+
+Quantized to int8 (~4x memory savings):
+
+```bash
+python nanollama.py --prompt "Hello" --chat --quantize q8
+```
+
+4-bit quantization (~8x memory savings):
+
+```bash
+python nanollama.py --prompt "Hello" --chat --quantize q4
+```
+
+Compiled model with kernel fusion:
+
+```bash
+python nanollama.py --prompt "Hello" --chat --compile
+```
+
+Batched generation from a file (one prompt per line):
+
+```bash
+python nanollama.py --batch-file prompts.txt --chat --dtype float16
 ```
 
 ## Output format

@@ -66,6 +66,66 @@ class RMSNorm(nn.Module):
         return (x.float() * norm).type_as(x) * self.weight
 
 
+# ── Quantization ─────────────────────────────────────────────────────────
+# Store weights as low-bit integers + a scale factor to save memory.
+# On forward pass, dequantize back to float for the matmul.
+# Q8 (int8): ~4x memory savings. Q4 (4-bit packed into int8): ~8x savings.
+# Per-channel (absmax) quantization: scale = max(|w|) / max_int per output row.
+
+class QuantizedLinear(nn.Module):
+    """Drop-in nn.Linear replacement with quantized weights."""
+
+    def __init__(self, weight: torch.Tensor, bias: torch.Tensor | None, bits: int = 8):
+        super().__init__()
+        self.out_features, self.in_features = weight.shape
+        self.bits = bits
+        max_int = (1 << (bits - 1)) - 1  # 127 for Q8, 7 for Q4
+
+        # Per-output-channel absmax scale
+        scale = weight.float().abs().amax(dim=1) / max_int  # [out_features]
+        quantized = (weight.float() / scale.unsqueeze(1)).round().clamp(-max_int - 1, max_int).to(torch.int8)
+
+        if bits == 4:
+            # Pack two 4-bit values into one int8: high nibble + low nibble
+            # Pad columns to even count if needed
+            if quantized.shape[1] % 2 != 0:
+                quantized = F.pad(quantized, (0, 1))
+            even, odd = quantized[:, 0::2], quantized[:, 1::2]
+            quantized = (even << 4) | (odd & 0x0F)
+
+        self.register_buffer("qweight", quantized)
+        self.register_buffer("scale", scale)
+        if bias is not None:
+            self.register_buffer("bias", bias)
+        else:
+            self.bias = None
+
+    def forward(self, x):
+        if self.bits == 4:
+            # Unpack: extract high nibble (arithmetic shift preserves sign) and low nibble
+            w = self.qweight
+            high = w >> 4                        # sign-extending arithmetic shift
+            low = (w << 4).to(torch.int8) >> 4   # shift left then arithmetic shift right
+            unpacked = torch.stack([high, low], dim=-1).reshape(self.out_features, -1)
+            unpacked = unpacked[:, :self.in_features]  # trim padding
+            w_deq = unpacked.float() * self.scale.unsqueeze(1)
+        else:
+            w_deq = self.qweight.float() * self.scale.unsqueeze(1)
+        out = x.float() @ w_deq.T
+        if self.bias is not None:
+            out = out + self.bias.float()
+        return out.type_as(x)
+
+
+def quantize_model(model: nn.Module, bits: int = 8):
+    """Replace all nn.Linear layers with QuantizedLinear (in-place)."""
+    for name, child in model.named_children():
+        if isinstance(child, nn.Linear):
+            setattr(model, name, QuantizedLinear(child.weight.data, child.bias.data if child.bias is not None else None, bits))
+        else:
+            quantize_model(child, bits)
+
+
 # ── Rotary Positional Embeddings (RoPE) ───────────────────────────────────
 # Encodes position by rotating pairs of dimensions. The dot product of two
 # rotated vectors depends only on their RELATIVE position — this gives the
@@ -82,10 +142,17 @@ def precompute_rope(dim: int, max_seq: int, theta: float = 10000.0):
 
 
 def apply_rope(q, k, cos, sin, pos):
-    """Rotate q and k by position-dependent angles."""
-    seq = q.shape[1]
-    cos = cos[pos:pos + seq].unsqueeze(0).unsqueeze(2)  # [1, seq, 1, dim//2]
-    sin = sin[pos:pos + seq].unsqueeze(0).unsqueeze(2)
+    """Rotate q and k by position-dependent angles.
+    pos: int (single offset for all seqs) or tensor [B, S] (per-token positions).
+    """
+    if isinstance(pos, int):
+        seq = q.shape[1]
+        cos = cos[pos:pos + seq].unsqueeze(0).unsqueeze(2)  # [1, seq, 1, dim//2]
+        sin = sin[pos:pos + seq].unsqueeze(0).unsqueeze(2)
+    else:
+        # Batched position_ids [B, S] — gather per-token cos/sin
+        cos = cos[pos].unsqueeze(2)  # [B, S, 1, dim//2]
+        sin = sin[pos].unsqueeze(2)
 
     def rotate(x):
         x = x.float()
@@ -128,10 +195,22 @@ class Attention(nn.Module):
             self.cache_k = torch.zeros(B, cos.shape[0], self.n_kv, self.head_dim,
                                        dtype=x.dtype, device=x.device)
             self.cache_v = torch.zeros_like(self.cache_k)
-        self.cache_k[:B, pos:pos + S] = k
-        self.cache_v[:B, pos:pos + S] = v
-        k = self.cache_k[:B, :pos + S]
-        v = self.cache_v[:B, :pos + S]
+        if isinstance(pos, int):
+            self.cache_k[:B, pos:pos + S] = k
+            self.cache_v[:B, pos:pos + S] = v
+            kv_len = pos + S
+        else:
+            # Batched position_ids [B, S] — write real tokens to cache positions.
+            # Left-padded inputs have duplicate position 0s (padding + first real token).
+            # Loop ensures the real token (rightmost) wins deterministically.
+            for b in range(B):
+                for s in range(S):
+                    p = pos[b, s].item()
+                    self.cache_k[b, p] = k[b, s]
+                    self.cache_v[b, p] = v[b, s]
+            kv_len = pos.max().item() + 1
+        k = self.cache_k[:B, :kv_len]
+        v = self.cache_v[:B, :kv_len]
 
         # Expand KV heads to match Q heads (GQA)
         if self.n_rep > 1:
@@ -140,12 +219,13 @@ class Attention(nn.Module):
             v = v.unsqueeze(3).expand(-1, -1, -1, self.n_rep, -1)
             v = v.reshape(B, -1, self.n_heads, self.head_dim)
 
-        # Scaled dot-product attention
+        # Scaled dot-product attention (scores computed in float32 for stability
+        # with float16, where MPS accumulates in half-precision unlike CUDA)
         q, k, v = (t.transpose(1, 2) for t in (q, k, v))
-        scores = (q @ k.transpose(-2, -1)) / math.sqrt(self.head_dim)
+        scores = (q.float() @ k.float().transpose(-2, -1)) / math.sqrt(self.head_dim)
         if mask is not None:
             scores += mask
-        attn = F.softmax(scores.float(), dim=-1).type_as(q)
+        attn = F.softmax(scores, dim=-1).type_as(q)
         out = (attn @ v).transpose(1, 2).contiguous().reshape(B, S, -1)
         return self.o_proj(out)
 
@@ -198,23 +278,43 @@ class Transformer(nn.Module):
             hd, cfg.max_position_embeddings, cfg.rope_theta
         )
 
-    def forward(self, tokens, start_pos=0):
+    def forward(self, tokens, start_pos=0, position_ids=None, pad_mask=None):
+        """Forward pass.
+        Args:
+            tokens: [B, S] token IDs
+            start_pos: int position offset (used when position_ids is None)
+            position_ids: [B, S] per-token position indices for RoPE (for batched/padded inputs)
+            pad_mask: [B, total_seq_len] bool — True for real tokens, False for padding
+        """
         h = self.embed_tokens(tokens)
         cos = self.rope_cos.to(h.device)
         sin = self.rope_sin.to(h.device)
 
+        # Use position_ids for RoPE if provided, else fall back to start_pos
+        pos = position_ids if position_ids is not None else start_pos
+
         # Causal mask: prevent attending to future positions
         mask = None
-        seq = tokens.shape[1]
+        B, seq = tokens.shape
+        kv_len = (position_ids.max().item() + 1) if position_ids is not None else start_pos + seq
         if seq > 1:
             mask = torch.full((seq, seq), float("-inf"), device=h.device)
             mask = torch.triu(mask, diagonal=1)
-            if start_pos > 0:
-                mask = torch.cat([torch.zeros(seq, start_pos, device=h.device), mask], -1)
-            mask = mask.unsqueeze(0).unsqueeze(0)
+            prefix = kv_len - seq  # cached positions before current tokens
+            if prefix > 0:
+                mask = torch.cat([torch.zeros(seq, prefix, device=h.device), mask], -1)
+            mask = mask.unsqueeze(0).unsqueeze(0)  # [1, 1, S, kv_len]
+
+        # Padding mask: block attention to padding positions in the KV cache
+        if pad_mask is not None:
+            # Use torch.where to avoid 0.0 * -inf = NaN (IEEE 754)
+            pad_attn = torch.where(
+                pad_mask[:, :kv_len], 0.0, float("-inf")
+            ).unsqueeze(1).unsqueeze(2)  # [B, 1, 1, kv_len]
+            mask = pad_attn if mask is None else mask + pad_attn
 
         for layer in self.layers:
-            h = layer(h, cos, sin, start_pos, mask)
+            h = layer(h, cos, sin, pos, mask)
 
         return self.lm_head(self.norm(h))
 
@@ -225,7 +325,7 @@ class Transformer(nn.Module):
 
 # ── Loading ───────────────────────────────────────────────────────────────
 
-def load_model(model_id: str, device: str = "cpu"):
+def load_model(model_id: str, device: str = "cpu", dtype: torch.dtype = torch.float32):
     """Download a model from HuggingFace and load it. Returns (model, tokenizer)."""
     path = Path(model_id)
     if not path.exists():
@@ -251,12 +351,14 @@ def load_model(model_id: str, device: str = "cpu"):
     # Build model and load weights
     model = Transformer(cfg)
     model.load_state_dict(mapped, strict=False)
-    model.to(device).eval()
+    model.to(dtype=dtype, device=device).eval()
 
     tokenizer = AutoTokenizer.from_pretrained(str(path))
 
     params = sum(p.numel() for p in model.parameters())
-    print(f"Loaded {cfg.num_hidden_layers} layers, {params / 1e9:.1f}B params on {device}")
+    dtype_str = {torch.float32: "float32", torch.float16: "float16",
+                 torch.bfloat16: "bfloat16"}.get(dtype, str(dtype))
+    print(f"Loaded {cfg.num_hidden_layers} layers, {params / 1e9:.1f}B params on {device} ({dtype_str})")
     return model, tokenizer
 
 
@@ -376,6 +478,142 @@ def generate(model, tokenizer, prompt: str, max_tokens: int = 200,
     return tokenizer.decode(generated, skip_special_tokens=True)
 
 
+# ── Batched Generation ────────────────────────────────────────────────────
+# Process multiple prompts in a single forward pass for higher throughput.
+# Left-pad shorter prompts so all sequences align on the right (the generation
+# side). position_ids track the real position of each token for RoPE, and a
+# padding mask prevents attention to padding positions.
+
+def generate_batch(model, tokenizer, prompts: list[str], max_tokens: int = 200,
+                   temperature: float = 0.7, top_k: int = 0, top_p: float = 1.0,
+                   repeat_penalty: float = 1.0, add_bos: bool = True):
+    """Generate text from multiple prompts simultaneously."""
+    device = next(model.parameters()).device
+    eos_id = tokenizer.eos_token_id
+    pad_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else eos_id
+
+    # Tokenize all prompts
+    all_ids = []
+    for p in prompts:
+        ids = tokenizer.encode(p, add_special_tokens=False)
+        if add_bos:
+            ids = [tokenizer.bos_token_id] + ids
+        all_ids.append(ids)
+
+    # Left-pad to same length
+    max_len = max(len(ids) for ids in all_ids)
+    padded = []
+    pad_lengths = []
+    for ids in all_ids:
+        pad_len = max_len - len(ids)
+        pad_lengths.append(pad_len)
+        padded.append([pad_id] * pad_len + ids)
+
+    B = len(prompts)
+    tokens = torch.tensor(padded, dtype=torch.long, device=device)  # [B, max_len]
+
+    # Position IDs: real tokens get 0, 1, 2, ...; padding gets 0 (masked out anyway)
+    position_ids = torch.zeros(B, max_len, dtype=torch.long, device=device)
+    for i, pl in enumerate(pad_lengths):
+        position_ids[i, pl:] = torch.arange(max_len - pl, device=device)
+
+    # Padding mask for CACHE positions (not input positions).
+    # With left-padding, cache positions 0..(real_len-1) have real content.
+    # Position real_len..(max_len-1) may be empty for shorter sequences.
+    pad_mask = torch.zeros(B, max_len + max_tokens, dtype=torch.bool, device=device)
+    for i, pl in enumerate(pad_lengths):
+        real_len = max_len - pl
+        pad_mask[i, :real_len] = True
+
+    model.reset()
+
+    # Prefill: process all prompts in one batched forward pass
+    t0 = time.perf_counter()
+    with torch.no_grad():
+        logits = model(tokens, position_ids=position_ids, pad_mask=pad_mask)
+    t_prefill = time.perf_counter() - t0
+
+    # Sample first token for each sequence
+    generated = [[] for _ in range(B)]
+    finished = [False] * B
+    next_ids = []
+    for i in range(B):
+        row_logits = logits[i:i+1, -1]
+        row_logits = row_logits.clone()
+        if temperature == 0:
+            nid = row_logits.argmax(-1).item()
+        else:
+            row_logits = row_logits / temperature
+            if top_k > 0:
+                top_values, _ = torch.topk(row_logits, min(top_k, row_logits.size(-1)))
+                row_logits[row_logits < top_values[:, -1, None]] = float("-inf")
+            nid = torch.multinomial(F.softmax(row_logits, dim=-1), 1).item()
+        generated[i].append(nid)
+        next_ids.append(nid)
+        if nid == eos_id:
+            finished[i] = True
+
+    # Decode: generate one token at a time, all sequences in lockstep.
+    # Each sequence tracks its own cache position (real_len + decode_step)
+    # since shorter sequences started at lower positions in the cache.
+    t_dec = time.perf_counter()
+    cur_positions = [max_len - pl for pl in pad_lengths]  # next write position per sequence
+    for step in range(1, max_tokens):
+        if all(finished):
+            break
+        inp = torch.tensor([[nid] for nid in next_ids], dtype=torch.long, device=device)
+        pos_ids = torch.tensor([[p] for p in cur_positions], dtype=torch.long, device=device)
+        # Mark new cache positions as valid in the pad_mask
+        for i in range(B):
+            pad_mask[i, cur_positions[i]] = True
+        with torch.no_grad():
+            logits = model(inp, position_ids=pos_ids, pad_mask=pad_mask)
+        cur_positions = [p + 1 for p in cur_positions]
+
+        for i in range(B):
+            if finished[i]:
+                next_ids[i] = pad_id
+                continue
+            row_logits = logits[i:i+1, -1].clone()
+            history = all_ids[i] + generated[i]
+            if repeat_penalty != 1.0 and history:
+                for tid in set(history):
+                    if row_logits[0, tid] > 0:
+                        row_logits[0, tid] /= repeat_penalty
+                    else:
+                        row_logits[0, tid] *= repeat_penalty
+            if temperature == 0:
+                nid = row_logits.argmax(-1).item()
+            else:
+                row_logits = row_logits / temperature
+                if top_k > 0:
+                    top_values, _ = torch.topk(row_logits, min(top_k, row_logits.size(-1)))
+                    row_logits[row_logits < top_values[:, -1, None]] = float("-inf")
+                if top_p < 1.0:
+                    sorted_logits, sorted_idx = torch.sort(row_logits, descending=True)
+                    cumulative_probs = torch.softmax(sorted_logits, dim=-1).cumsum(dim=-1)
+                    remove = cumulative_probs - torch.softmax(sorted_logits, dim=-1) >= top_p
+                    sorted_logits[remove] = float("-inf")
+                    row_logits = torch.zeros_like(sorted_logits).scatter(-1, sorted_idx, sorted_logits)
+                nid = torch.multinomial(F.softmax(row_logits, dim=-1), 1).item()
+            generated[i].append(nid)
+            next_ids[i] = nid
+            if nid == eos_id:
+                finished[i] = True
+    t_dec_total = time.perf_counter() - t_dec
+
+    results = []
+    for i in range(B):
+        text = tokenizer.decode(generated[i], skip_special_tokens=True)
+        results.append(text)
+
+    total_prompt = sum(len(ids) for ids in all_ids)
+    total_gen = sum(len(g) for g in generated)
+    print(f"\n[batch={B} | prefill: {total_prompt} tok @ {total_prompt / t_prefill:.0f} t/s"
+          f" | decode: {total_gen} tok @ {max(1, total_gen - B) / t_dec_total:.1f} t/s]")
+    return results
+
+
 # ── Main ──────────────────────────────────────────────────────────────────
 
 def auto_device() -> str:
@@ -392,6 +630,8 @@ if __name__ == "__main__":
     parser.add_argument("--model", default="deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
                         help="HuggingFace model ID or local path")
     parser.add_argument("--device", default=None, help="cpu, cuda, or mps (auto-detected)")
+    parser.add_argument("--dtype", default="float32", choices=["float32", "float16", "bfloat16"],
+                        help="model precision: float32, float16, bfloat16 (default: float32)")
     parser.add_argument("--temp", type=float, default=0.7, help="sampling temperature (default: 0.7)")
     parser.add_argument("--top-k", type=int, default=50, help="top-k filtering: keep k most likely tokens, 0=disabled (default: 50)")
     parser.add_argument("--top-p", type=float, default=0.9, help="top-p nucleus sampling threshold, 1.0=disabled (default: 0.9)")
@@ -400,13 +640,33 @@ if __name__ == "__main__":
     parser.add_argument("--chat", action="store_true", help="wrap prompt in ChatML template for chat-tuned models")
     parser.add_argument("--interactive", action="store_true", help="interactive REPL mode (implies --chat)")
     parser.add_argument("--system", default=None, help="system prompt to steer model behavior (used with --chat or --interactive)")
+    parser.add_argument("--quantize", default=None, choices=["q8", "q4"],
+                        help="post-load weight quantization: q8 (int8, ~4x savings) or q4 (4-bit, ~8x savings)")
+    parser.add_argument("--compile", action="store_true",
+                        help="use torch.compile() for kernel fusion (slower first run, faster generation)")
+    parser.add_argument("--batch-file", default=None,
+                        help="file with one prompt per line for batched generation")
     args = parser.parse_args()
 
-    if not args.interactive and not args.prompt:
-        parser.error("--prompt is required (unless using --interactive)")
+    if not args.interactive and not args.prompt and not args.batch_file:
+        parser.error("--prompt is required (unless using --interactive or --batch-file)")
 
     device = args.device or auto_device()
-    model, tokenizer = load_model(args.model, device)
+    dtype = {"float32": torch.float32, "float16": torch.float16,
+             "bfloat16": torch.bfloat16}[args.dtype]
+    model, tokenizer = load_model(args.model, device, dtype)
+
+    if args.quantize:
+        bits = {"q8": 8, "q4": 4}[args.quantize]
+        print(f"Quantizing to {args.quantize.upper()}...")
+        quantize_model(model, bits)
+        qparams = sum(p.numel() for p in model.parameters()) + sum(b.numel() for b in model.buffers())
+        qbytes = sum(b.nbytes for b in model.buffers()) + sum(p.nbytes for p in model.parameters())
+        print(f"Quantized: {qbytes / 1e9:.1f}GB ({args.quantize.upper()})")
+
+    if args.compile:
+        print("Compiling model with torch.compile()...")
+        model = torch.compile(model)
 
     sampling = dict(max_tokens=args.max_tokens, temperature=args.temp,
                     top_k=args.top_k, top_p=args.top_p,
@@ -446,6 +706,21 @@ if __name__ == "__main__":
                 print()
         except KeyboardInterrupt:
             print()
+    elif args.batch_file:
+        # Batched generation: process multiple prompts simultaneously
+        with open(args.batch_file) as f:
+            prompts = [line.strip() for line in f if line.strip()]
+        print(f"Device: {device}")
+        print(f"Batch: {len(prompts)} prompts\n")
+        if args.chat:
+            prompts = [apply_chat_template([{"role": "user", "content": p}], tokenizer) for p in prompts]
+            add_bos = False
+        else:
+            add_bos = True
+        results = generate_batch(model, tokenizer, prompts, add_bos=add_bos, **sampling)
+        for i, (p, r) in enumerate(zip(prompts, results)):
+            print(f"\n--- Prompt {i + 1} ---")
+            print(r)
     else:
         print(f"Device: {device}")
         print(f"Prompt: {args.prompt}\n")

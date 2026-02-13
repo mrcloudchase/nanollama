@@ -1,10 +1,10 @@
 # nanollama Roadmap
 
-Features to add incrementally on top of the ~400-line starting point. Each item
+Features to add incrementally on top of the ~750-line starting point. Each item
 is a self-contained exercise that teaches a new concept. Ordered by complexity —
 start from the top and work your way down.
 
-**Current state:** Phase 2 complete. Working on Phase 3.
+**Current state:** Phase 3 complete. Working on Phase 4.
 
 ---
 
@@ -181,23 +181,74 @@ start from the top and work your way down.
 
 ## Phase 3: Performance
 
-- [ ] **Float16 inference** — Run in half-precision to halve memory. Requires
+- [x] **Float16 inference** — Run in half-precision to halve memory. Requires
   careful handling of norms and softmax for numerical stability.
-  - *What you'll learn*: Floating-point precision, mixed-precision computation.
+  - *What you'll learn*: Floating-point precision, mixed-precision computation,
+    why MPS float16 matmuls need float32 accumulation.
+  - Output sample (`--prompt "What is the capital of France?" --chat --dtype float16`):
+    ```
+    Loaded 28 layers, 1.8B params on mps (float16)
 
-- [ ] **Basic quantization (Q8)** — Store weights as int8 + scale, dequantize
+    Okay, so I need to figure out what the capital of France is...
+
+    [prefill: 12 tok @ 17 t/s | decode: 50 tok @ 10.0 t/s]
+    ```
+    100x speedup over float32 (10.0 vs 0.1 t/s decode) with identical output.
+    Attention scores are computed in float32 to avoid overflow on MPS where
+    float16 matmuls accumulate in half-precision (unlike CUDA).
+
+- [x] **Basic quantization (Q8)** — Store weights as int8 + scale, dequantize
   during matmul. ~4x memory savings with minimal quality loss.
-  - *What you'll learn*: Quantization theory, scale/zero-point, memory tradeoffs.
+  - *What you'll learn*: Quantization theory, per-channel absmax scaling,
+    memory vs. speed tradeoffs (dequantize is slow without custom kernels).
+  - Output sample (`--prompt "What is the capital of France?" --chat --quantize q8`):
+    ```
+    Quantized: 2.5GB (Q8)   [vs ~7GB float32]
 
-- [ ] **4-bit quantization (Q4)** — More aggressive compression with block-wise
+    Okay, so I need to figure out what...
+    ```
+    Correct output, ~4x memory savings. Decode is slow because dequantize
+    happens in Python — real speedup needs fused CUDA/MPS kernels.
+
+- [x] **4-bit quantization (Q4)** — More aggressive compression with block-wise
   scaling. ~8x memory savings.
-  - *What you'll learn*: Block quantization, GPTQ vs RTN vs AWQ approaches.
+  - *What you'll learn*: 4-bit packing (two values per int8), nibble
+    extraction with bit shifts, quality vs. compression tradeoffs.
+  - Output sample (`--quantize q4`):
+    ```
+    Quantized: 1.7GB (Q4)   [vs ~7GB float32]
+    ```
+    Two 4-bit values packed into each int8 byte. Unpacking uses arithmetic
+    right shift (preserves sign) for the high nibble and shift-left-then-right
+    for the low nibble.
 
-- [ ] **torch.compile()** — Automatic kernel fusion. Can give 2-3x speedup.
+- [x] **torch.compile()** — Automatic kernel fusion. Can give 2-3x speedup.
   - *What you'll learn*: PyTorch compiler (tracing, graph capture, fusion).
+  - Usage: `--compile` flag. First forward pass is slow (compilation), then
+    subsequent passes benefit from fused kernels. Works with all dtype options.
 
-- [ ] **Batched generation** — Process multiple prompts simultaneously.
-  - *What you'll learn*: Padding, masking, throughput vs. latency tradeoffs.
+- [x] **Batched generation** — Process multiple prompts simultaneously.
+  - *What you'll learn*: Left-padding, position IDs for RoPE, padding masks,
+    per-sequence KV cache management, throughput vs. latency tradeoffs.
+  - Output sample (`--batch-file prompts.txt --chat --dtype float16`):
+    ```
+    Batch: 3 prompts
+
+    [batch=3 | prefill: 35 tok @ 10 t/s | decode: 90 tok @ 0.8 t/s]
+
+    --- Prompt 1 ---
+    Okay, so I need to figure out what the capital of France is...
+
+    --- Prompt 2 ---
+    I need to determine the sum of 2 and 2...
+
+    --- Prompt 3 ---
+    Okay, so I'm trying to figure out who wrote "Romeo and Juliet."...
+    ```
+    Key challenges: left-padding aligns generation positions, position_ids
+    give correct RoPE positions despite padding, pad_mask tracks valid
+    CACHE positions (not input positions), per-sequence position tracking
+    during decode to avoid gaps.
 
 ---
 

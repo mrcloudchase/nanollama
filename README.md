@@ -7,7 +7,7 @@
 [![Python 3.13](https://img.shields.io/badge/python-3.13-blue.svg)](https://www.python.org/downloads/)
 [![GitHub stars](https://img.shields.io/github/stars/mrcloudchase/nanollama)](https://github.com/mrcloudchase/nanollama/stargazers)
 
-An educational LLM inference engine in ~400 lines of PyTorch.
+An educational LLM inference engine in ~750 lines of PyTorch.
 
 nanollama is a single-file, from-scratch implementation of LLM inference. It loads a real model from HuggingFace, runs the full transformer forward pass, and generates text — all in code you can read top to bottom in one sitting.
 
@@ -45,14 +45,16 @@ See [docs/cli.md](docs/cli.md) for the full CLI reference, all flags, and exampl
 |---------|-------|-----------------|
 | `Config` | ~20 | Model hyperparameters (layers, heads, dimensions) |
 | `RMSNorm` | ~13 | Normalization without mean-centering |
-| `RoPE` | ~25 | Positional encoding via rotation |
-| `Attention` | ~50 | GQA + KV-cache in one class |
+| `QuantizedLinear` | ~50 | Q8/Q4 weight quantization with per-channel scaling |
+| `RoPE` | ~30 | Positional encoding via rotation (supports batched position IDs) |
+| `Attention` | ~55 | GQA + KV-cache with batched position support |
 | `FFN` | ~13 | SwiGLU gated feed-forward |
 | `Block` | ~15 | Pre-norm residual: norm → attn → + → norm → ffn → + |
-| `Transformer` | ~38 | Embed → N blocks → norm → logits |
-| `load_model` | ~25 | Download + load safetensors weights |
-| `generate` | ~42 | Prefill/decode loop with streaming |
-| `main` | ~25 | Device detection, argparse CLI |
+| `Transformer` | ~45 | Embed → N blocks → norm → logits (with padding mask support) |
+| `load_model` | ~30 | Download + load safetensors weights, dtype conversion |
+| `generate` | ~45 | Prefill/decode loop with streaming |
+| `generate_batch` | ~85 | Batched generation with left-padding and per-sequence tracking |
+| `main` | ~80 | Device detection, argparse CLI, interactive/batch modes |
 
 ## How it compares to Ollama
 
@@ -60,10 +62,10 @@ See [docs/cli.md](docs/cli.md) for the full CLI reference, all flags, and exampl
 |---------|--------|-----------|
 | Language | Go + C (llama.cpp) | Pure Python + PyTorch |
 | Speed | Highly optimized | Educational, not optimized |
-| Quantization | GGUF Q4/Q8/etc. | Float32 only |
+| Quantization | GGUF Q4/Q8/etc. | Float16/Q8/Q4 |
 | Model format | GGUF | HuggingFace safetensors |
 | API server | Yes (OpenAI-compatible) | No |
-| Code size | ~100K lines | ~400 lines |
+| Code size | ~100K lines | ~750 lines |
 | Goal | Production inference | Learning |
 
 ## What's next

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-nanollama is an educational LLM inference engine in a single file (`nanollama.py`, ~400 lines). It implements a LLaMA-architecture transformer from scratch in PyTorch to teach how LLM inference works. It is intentionally minimal — see ROADMAP.md for features to add incrementally.
+nanollama is an educational LLM inference engine in a single file (`nanollama.py`, ~750 lines). It implements a LLaMA-architecture transformer from scratch in PyTorch to teach how LLM inference works. It is intentionally minimal — see ROADMAP.md for features to add incrementally.
 
 ## Commands
 
