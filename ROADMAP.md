@@ -134,10 +134,18 @@ start from the top and work your way down.
     Romeo and Juliet was written by William Shakespeare in 1597.
     ```
 
-- [ ] **Jinja2 chat templates** — Load chat templates from the model's
+- [x] **Jinja2 chat templates** — Load chat templates from the model's
   `tokenizer_config.json` instead of hardcoding. This is how HuggingFace and
   Ollama support many chat formats with one codebase.
   - *What you'll learn*: Jinja2 templating, how different models use different formats.
+  - Output sample (`--prompt "What is the capital of France?" --chat --model HuggingFaceTB/SmolLM2-1.7B-Instruct`):
+    ```
+    The capital of France is Paris.
+
+    [prefill: 37 tok @ 19 t/s | decode: 8 tok @ 0.2 t/s]
+    ```
+    Same `--chat` flag, different model — the Jinja2 template automatically
+    used SmolLM2's `<|im_start|>` format instead of TinyLlama's `<|user|>`.
 
 - [ ] **Multi-turn conversation** — Maintain conversation history across turns
   by concatenating past messages into the prompt.

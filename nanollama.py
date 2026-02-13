@@ -238,6 +238,9 @@ def load_model(model_id: str, device: str = "cpu"):
         weights.update(load_file(f))
     # HuggingFace prefixes weights with "model." — strip it
     mapped = {(k[6:] if k.startswith("model.") else k): v for k, v in weights.items()}
+    # Some models tie lm_head to embed_tokens (no separate lm_head in weights)
+    if "lm_head.weight" not in mapped:
+        mapped["lm_head.weight"] = mapped["embed_tokens.weight"]
     model.load_state_dict(mapped, strict=False)
     model.to(device).eval()
 
@@ -252,15 +255,27 @@ def load_model(model_id: str, device: str = "cpu"):
 # Chat-tuned models are fine-tuned on text with special role markers like
 # <|user|> and <|assistant|>. Without these markers, the model doesn't know
 # it should "respond" — it just continues the text like autocomplete.
-# TinyLlama uses the ChatML format. Other models use different formats
-# (Llama, Alpaca, etc.) — see ROADMAP.md for Jinja2 template support.
+# Each model stores its template as a Jinja2 string in tokenizer_config.json.
+# We load and render it so any model's chat format works automatically —
+# this is how HuggingFace and Ollama support many formats with one codebase.
 
-CHATML_TEMPLATE = "<|user|>\n{prompt}</s>\n<|assistant|>\n"
+CHATML_FALLBACK = "<|user|>\n{prompt}</s>\n<|assistant|>\n"
 
 
-def apply_chat_template(prompt: str) -> str:
-    """Wrap a user message in ChatML format."""
-    return CHATML_TEMPLATE.format(prompt=prompt)
+def apply_chat_template(prompt: str, tokenizer) -> str:
+    """Format a user message using the model's Jinja2 chat template."""
+    messages = [{"role": "user", "content": prompt}]
+    if hasattr(tokenizer, "chat_template") and tokenizer.chat_template:
+        from jinja2 import BaseLoader, Environment
+        env = Environment(loader=BaseLoader(), keep_trailing_newline=True,
+                          trim_blocks=True, lstrip_blocks=True)
+        template = env.from_string(tokenizer.chat_template)
+        return template.render(
+            messages=messages, add_generation_prompt=True,
+            bos_token=tokenizer.bos_token or "",
+            eos_token=tokenizer.eos_token or "",
+        )
+    return CHATML_FALLBACK.format(prompt=prompt)
 
 
 # ── Generation ────────────────────────────────────────────────────────────
@@ -396,7 +411,7 @@ if __name__ == "__main__":
                     continue
                 if user_input.strip() == "/exit":
                     break
-                prompt = apply_chat_template(user_input)
+                prompt = apply_chat_template(user_input, tokenizer)
                 generate(model, tokenizer, prompt, add_bos=False, **sampling)
                 print()
         except KeyboardInterrupt:
@@ -405,7 +420,7 @@ if __name__ == "__main__":
         print(f"Device: {device}")
         print(f"Prompt: {args.prompt}\n")
         if args.chat:
-            prompt = apply_chat_template(args.prompt)
+            prompt = apply_chat_template(args.prompt, tokenizer)
             add_bos = False
         else:
             prompt = args.prompt
