@@ -18,7 +18,7 @@ python nanollama.py --interactive [--model MODEL] [--device DEVICE] [...]
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--model MODEL` | `TinyLlama/TinyLlama-1.1B-Chat-v1.0` | HuggingFace model ID or local path to a downloaded model directory |
+| `--model MODEL` | `deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B` | HuggingFace model ID or local path to a downloaded model directory |
 | `--device DEVICE` | auto-detected | Compute device: `cpu`, `cuda` (NVIDIA GPU), or `mps` (Apple Silicon). Auto-detection priority: cuda > mps > cpu |
 | `--temp TEMP` | `0.7` | Sampling temperature. Controls randomness: `0` = greedy (always pick the most likely token), `0.7` = balanced, `1.5` = creative. Higher values flatten the probability distribution |
 | `--top-k TOP_K` | `50` | Top-k filtering. Keep only the k most likely tokens before sampling. Set to `0` to disable. Lower values = more focused output |
@@ -93,7 +93,7 @@ python nanollama.py --prompt "Hello" --max-tokens 30 --device cpu
 Using a different model:
 
 ```bash
-python nanollama.py --prompt "Hello" --model TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T
+python nanollama.py --prompt "Hello" --model TinyLlama/TinyLlama-1.1B-Chat-v1.0
 ```
 
 ## Output format

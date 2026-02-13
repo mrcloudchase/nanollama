@@ -29,10 +29,11 @@ By reading `nanollama.py`, you'll understand:
 uv venv
 source .venv/bin/activate
 uv pip install -r requirements.txt
-python nanollama.py --prompt "The meaning of life is"
+python nanollama.py --prompt "What is the capital of France?" --chat
 ```
 
-The first run downloads the model from HuggingFace. Subsequent runs use the cache.
+The first run downloads the model from HuggingFace (~3GB). Subsequent runs use the cache.
+Default model: [DeepSeek-R1-Distill-Qwen-1.5B](https://huggingface.co/deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B). Use `--model` to try others.
 
 See [docs/cli.md](docs/cli.md) for the full CLI reference, all flags, and examples.
 

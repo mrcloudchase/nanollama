@@ -41,6 +41,7 @@ class Config:
     max_position_embeddings: int = 2048
     rms_norm_eps: float = 1e-5
     rope_theta: float = 10000.0
+    attention_bias: bool = False         # Qwen2 uses bias on QKV projections
 
     @classmethod
     def from_json(cls, path: Path) -> "Config":
@@ -108,9 +109,10 @@ class Attention(nn.Module):
         self.head_dim = cfg.hidden_size // self.n_heads
         self.n_rep = self.n_heads // self.n_kv  # how many Q heads per KV head
 
-        self.q_proj = nn.Linear(cfg.hidden_size, self.n_heads * self.head_dim, bias=False)
-        self.k_proj = nn.Linear(cfg.hidden_size, self.n_kv * self.head_dim, bias=False)
-        self.v_proj = nn.Linear(cfg.hidden_size, self.n_kv * self.head_dim, bias=False)
+        qkv_bias = cfg.attention_bias  # LLaMA: False, Qwen2: True
+        self.q_proj = nn.Linear(cfg.hidden_size, self.n_heads * self.head_dim, bias=qkv_bias)
+        self.k_proj = nn.Linear(cfg.hidden_size, self.n_kv * self.head_dim, bias=qkv_bias)
+        self.v_proj = nn.Linear(cfg.hidden_size, self.n_kv * self.head_dim, bias=qkv_bias)
         self.o_proj = nn.Linear(self.n_heads * self.head_dim, cfg.hidden_size, bias=False)
         self.cache_k = self.cache_v = None
 
@@ -232,8 +234,7 @@ def load_model(model_id: str, device: str = "cpu"):
 
     cfg = Config.from_json(path / "config.json")
 
-    # Build model and load weights
-    model = Transformer(cfg)
+    # Load weights first so we can detect architecture features
     weights = {}
     for f in sorted(path.glob("*.safetensors")):
         weights.update(load_file(f))
@@ -242,6 +243,13 @@ def load_model(model_id: str, device: str = "cpu"):
     # Some models tie lm_head to embed_tokens (no separate lm_head in weights)
     if "lm_head.weight" not in mapped:
         mapped["lm_head.weight"] = mapped["embed_tokens.weight"]
+
+    # Auto-detect QKV bias from weights (Qwen2 uses bias, LLaMA doesn't)
+    if "layers.0.self_attn.q_proj.bias" in mapped:
+        cfg.attention_bias = True
+
+    # Build model and load weights
+    model = Transformer(cfg)
     model.load_state_dict(mapped, strict=False)
     model.to(device).eval()
 
@@ -381,7 +389,7 @@ def auto_device() -> str:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="nanollama — educational LLM inference")
     parser.add_argument("--prompt", default=None, help="input prompt")
-    parser.add_argument("--model", default="TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+    parser.add_argument("--model", default="deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
                         help="HuggingFace model ID or local path")
     parser.add_argument("--device", default=None, help="cpu, cuda, or mps (auto-detected)")
     parser.add_argument("--temp", type=float, default=0.7, help="sampling temperature (default: 0.7)")
