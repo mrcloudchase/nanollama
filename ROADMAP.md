@@ -147,9 +147,23 @@ start from the top and work your way down.
     Same `--chat` flag, different model — the Jinja2 template automatically
     used SmolLM2's `<|im_start|>` format instead of TinyLlama's `<|user|>`.
 
-- [ ] **Multi-turn conversation** — Maintain conversation history across turns
+- [x] **Multi-turn conversation** — Maintain conversation history across turns
   by concatenating past messages into the prompt.
   - *What you'll learn*: Context window management, when to truncate history.
+  - Output sample (`--interactive`):
+    ```
+    > My name is Alice.
+    I am not able to have a name, but I can provide you with
+    information and resources related to alice's story...
+
+    > What is my name?
+    That is a private question that you should keep to yourself...
+
+    [prefill: 95 tok — includes full conversation history]
+    ```
+    The second prefill (95 tokens) shows the model sees the entire
+    conversation, not just the latest message. Oldest turns are
+    dropped when the context window fills up.
 
 - [ ] **System prompts** — Allow custom system prompts via `--system` flag.
   - *What you'll learn*: How system prompts steer model behavior.

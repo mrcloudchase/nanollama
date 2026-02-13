@@ -186,6 +186,7 @@ class Block(nn.Module):
 class Transformer(nn.Module):
     def __init__(self, cfg: Config):
         super().__init__()
+        self.max_seq_len = cfg.max_position_embeddings
         self.embed_tokens = nn.Embedding(cfg.vocab_size, cfg.hidden_size)
         self.layers = nn.ModuleList(Block(cfg) for _ in range(cfg.num_hidden_layers))
         self.norm = RMSNorm(cfg.hidden_size, cfg.rms_norm_eps)
@@ -262,9 +263,13 @@ def load_model(model_id: str, device: str = "cpu"):
 CHATML_FALLBACK = "<|user|>\n{prompt}</s>\n<|assistant|>\n"
 
 
-def apply_chat_template(prompt: str, tokenizer) -> str:
-    """Format a user message using the model's Jinja2 chat template."""
-    messages = [{"role": "user", "content": prompt}]
+def apply_chat_template(messages: list[dict], tokenizer) -> str:
+    """Format messages using the model's Jinja2 chat template.
+
+    Args:
+        messages: List of {"role": "user"|"assistant"|"system", "content": "..."}
+        tokenizer: HuggingFace tokenizer (provides chat_template and special tokens)
+    """
     if hasattr(tokenizer, "chat_template") and tokenizer.chat_template:
         from jinja2 import BaseLoader, Environment
         env = Environment(loader=BaseLoader(), keep_trailing_newline=True,
@@ -275,7 +280,9 @@ def apply_chat_template(prompt: str, tokenizer) -> str:
             bos_token=tokenizer.bos_token or "",
             eos_token=tokenizer.eos_token or "",
         )
-    return CHATML_FALLBACK.format(prompt=prompt)
+    # Fallback: render last user message in ChatML format
+    last_user = next(m["content"] for m in reversed(messages) if m["role"] == "user")
+    return CHATML_FALLBACK.format(prompt=last_user)
 
 
 # ── Generation ────────────────────────────────────────────────────────────
@@ -397,10 +404,14 @@ if __name__ == "__main__":
                     repeat_penalty=args.repeat_penalty)
 
     if args.interactive:
-        # REPL loop: read prompt, generate, repeat. Implies --chat.
+        # REPL loop with multi-turn history. Implies --chat.
+        # Each turn appends to the conversation and re-renders the full
+        # template so the model sees the entire context. If the conversation
+        # exceeds the context window, the oldest turns are dropped.
         print(f"\nDevice: {device}")
         print("Interactive mode — type a message, press Enter to generate.")
         print("Press Ctrl+C or type /exit to quit.\n")
+        history: list[dict] = []
         try:
             while True:
                 try:
@@ -411,8 +422,16 @@ if __name__ == "__main__":
                     continue
                 if user_input.strip() == "/exit":
                     break
-                prompt = apply_chat_template(user_input, tokenizer)
-                generate(model, tokenizer, prompt, add_bos=False, **sampling)
+                history.append({"role": "user", "content": user_input})
+                prompt = apply_chat_template(history, tokenizer)
+                # Truncate oldest turns if prompt exceeds context window
+                ids = tokenizer.encode(prompt, add_special_tokens=False)
+                while len(ids) > model.max_seq_len - sampling["max_tokens"] and len(history) > 1:
+                    history.pop(0)
+                    prompt = apply_chat_template(history, tokenizer)
+                    ids = tokenizer.encode(prompt, add_special_tokens=False)
+                reply = generate(model, tokenizer, prompt, add_bos=False, **sampling)
+                history.append({"role": "assistant", "content": reply})
                 print()
         except KeyboardInterrupt:
             print()
@@ -420,7 +439,8 @@ if __name__ == "__main__":
         print(f"Device: {device}")
         print(f"Prompt: {args.prompt}\n")
         if args.chat:
-            prompt = apply_chat_template(args.prompt, tokenizer)
+            messages = [{"role": "user", "content": args.prompt}]
+            prompt = apply_chat_template(messages, tokenizer)
             add_bos = False
         else:
             prompt = args.prompt
