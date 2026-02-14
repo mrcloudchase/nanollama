@@ -1,6 +1,6 @@
 # nanollama Roadmap
 
-Features to add incrementally on top of the ~750-line starting point. Each item
+Features added incrementally to `nanollama.py` (currently ~750 lines). Each item
 is a self-contained exercise that teaches a new concept. Ordered by complexity —
 start from the top and work your way down.
 

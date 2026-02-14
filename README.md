@@ -21,7 +21,10 @@ By reading `nanollama.py`, you'll understand:
 - **KV-Cache** — Why caching past keys/values makes generation fast (prefill vs. decode)
 - **SwiGLU FFN** — How gated feed-forward networks work
 - **Weight loading** — How pre-trained weights map onto a model architecture
-- **Sampling** — How temperature controls randomness in token selection
+- **Sampling** — How temperature, top-k, top-p, and repetition penalty control token selection
+- **Chat templates** — How Jinja2 templates format conversations for different models
+- **Quantization** — How Q8/Q4 integer quantization saves memory (per-channel absmax, 4-bit packing)
+- **Batched inference** — How left-padding, position IDs, and padding masks enable multi-prompt generation
 
 ## Quick start
 
@@ -45,16 +48,17 @@ See [docs/cli.md](docs/cli.md) for the full CLI reference, all flags, and exampl
 |---------|-------|-----------------|
 | `Config` | ~20 | Model hyperparameters (layers, heads, dimensions) |
 | `RMSNorm` | ~13 | Normalization without mean-centering |
-| `QuantizedLinear` | ~50 | Q8/Q4 weight quantization with per-channel scaling |
-| `RoPE` | ~30 | Positional encoding via rotation (supports batched position IDs) |
-| `Attention` | ~55 | GQA + KV-cache with batched position support |
+| `QuantizedLinear` | ~60 | Q8/Q4 weight quantization with per-channel scaling |
+| `RoPE` | ~35 | Positional encoding via rotation (supports batched position IDs) |
+| `Attention` | ~65 | GQA + KV-cache with batched position support |
 | `FFN` | ~13 | SwiGLU gated feed-forward |
 | `Block` | ~15 | Pre-norm residual: norm → attn → + → norm → ffn → + |
-| `Transformer` | ~45 | Embed → N blocks → norm → logits (with padding mask support) |
-| `load_model` | ~30 | Download + load safetensors weights, dtype conversion |
-| `generate` | ~45 | Prefill/decode loop with streaming |
-| `generate_batch` | ~85 | Batched generation with left-padding and per-sequence tracking |
-| `main` | ~80 | Device detection, argparse CLI, interactive/batch modes |
+| `Transformer` | ~60 | Embed → N blocks → norm → logits (with padding mask support) |
+| `load_model` | ~35 | Download + load safetensors weights, dtype conversion |
+| `Chat Template` | ~30 | Jinja2 template rendering for any model's chat format |
+| `generate` | ~80 | Prefill/decode loop with streaming and sampling |
+| `generate_batch` | ~135 | Batched generation with left-padding and per-sequence tracking |
+| `main` | ~120 | Device detection, argparse CLI, interactive/batch modes |
 
 ## How it compares to Ollama
 

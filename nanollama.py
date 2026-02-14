@@ -1,15 +1,15 @@
 """
-nanollama.py — An educational LLM inference engine in ~400 lines of PyTorch.
+nanollama.py — An educational LLM inference engine in ~750 lines of PyTorch.
 
-Loads a LLaMA-architecture model from HuggingFace and generates text.
+Loads a LLaMA/Qwen2-architecture model from HuggingFace and generates text.
 Every component of the transformer is implemented from scratch so you
 can see exactly how LLMs work at the tensor level.
 
 Usage:
     python nanollama.py --prompt "Once upon a time"
-    python nanollama.py --prompt "What is 2+2?" --temp 0
+    python nanollama.py --prompt "What is 2+2?" --chat --dtype float16
 
-First run downloads TinyLlama (~2GB). Subsequent runs use the cache.
+First run downloads the model from HuggingFace (~3GB). Subsequent runs use the cache.
 """
 
 import argparse
