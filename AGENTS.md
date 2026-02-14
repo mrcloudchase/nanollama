@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-nanollama is an educational LLM inference engine in a single file (`nanollama.py`, ~1000 lines). It implements a LLaMA/Qwen2-architecture transformer from scratch in PyTorch to teach how LLM inference works. It is intentionally minimal — see ROADMAP.md for features to add incrementally.
+nanollama is an educational LLM inference engine in a single file (`nanollama.py`, ~1300 lines). It implements a LLaMA/Qwen2-architecture transformer from scratch in PyTorch to teach how LLM inference works. It is intentionally minimal — see ROADMAP.md for features to add incrementally.
 
 ## Commands
 
@@ -20,6 +20,16 @@ python nanollama.py --batch-file prompts.txt --chat --dtype float16
 python nanollama.py --prompt "text" --chat --quantize q8
 python nanollama.py --prompt "text" --chat --compile
 python nanollama.py --serve --dtype float16 --port 8000
+
+# Model management
+python nanollama.py list
+python nanollama.py rm deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B
+
+# GGUF model
+python nanollama.py --model model.gguf --tokenizer deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B --prompt "Hello" --chat
+
+# Modelfile config
+python nanollama.py --modelfile my.mf --prompt "Hello" --chat
 ```
 
 No tests, no linter, no build step. It's a single-file script.
@@ -42,6 +52,7 @@ Everything is in `nanollama.py`, organized top-to-bottom as a dependency chain:
 ### Inference pipeline
 
 - **load_model()** — Downloads from HuggingFace Hub via `snapshot_download`, loads safetensors weights, strips `model.` prefix from weight names. Auto-detects tied embeddings (copies `embed_tokens` to `lm_head` if missing) and QKV bias (Qwen2). Accepts `dtype` parameter (float32/float16/bfloat16) for model conversion. Returns `(model, tokenizer)`.
+- **GGUF Loading** (`load_gguf()`) — Parses GGUF binary format (v2/v3): reads magic/version header, metadata key-value pairs (architecture-prefixed keys for Config fields), and tensor info array. Dequantizes Q8_0 (34-byte blocks: f16 scale + 32 int8) and Q4_0 (18-byte blocks: f16 scale + 16 packed uint8 nibbles offset by -8) using numpy. `_map_gguf_name()` converts GGUF names (`blk.0.attn_q.weight`) to our names (`layers.0.self_attn.q_proj.weight`). Requires `--tokenizer` for a HuggingFace tokenizer since GGUF doesn't include Python-usable tokenizer data.
 - **Chat Template** (`apply_chat_template()`) — Renders conversation messages using the model's Jinja2 chat template from `tokenizer_config.json`. Handles `bos_token`, `eos_token`, and `add_generation_prompt`. Falls back to hardcoded ChatML format if no template found.
 - **generate_streaming()** — Generator variant of `generate()` that yields `{"text", "token_id", "finish_reason"}` dicts instead of printing. Same prefill + decode + sampling logic. Used by the API server for both streaming and non-streaming responses.
 - **generate()** — Two-phase single-prompt generation loop:
@@ -49,7 +60,9 @@ Everything is in `nanollama.py`, organized top-to-bottom as a dependency chain:
   - *Decode*: Generate tokens one at a time. Each step feeds only the new token (start_pos increments), KV-cache provides context. Inner `sample()` function applies: repetition penalty → temperature scaling → top-k filtering → top-p nucleus sampling → multinomial/argmax. Streams each token to stdout by decoding the full generated sequence each step for correct tokenizer spacing.
 - **generate_batch()** — Batched multi-prompt generation. Left-pads all prompts to same length. Constructs per-token `position_ids` for correct RoPE despite padding. Builds `pad_mask` indexed by cache positions (not input positions). During decode, each sequence tracks its own cache position independently to avoid position gaps.
 - **API Server** (`create_app()`) — FastAPI app factory that returns an OpenAI-compatible HTTP server. Endpoints: `POST /v1/chat/completions` (chat with streaming), `POST /v1/completions` (text completion with streaming), `GET /v1/models` (list loaded model). Request/response schemas use Pydantic models matching OpenAI's format. An `asyncio.Lock` serializes model access since the KV-cache is mutable shared state. Streaming uses SSE (`data: {json}\n\n` chunks, ending with `data: [DONE]\n\n`). Generation runs in a thread pool via `asyncio.to_thread` to avoid blocking the event loop.
-- **main** — argparse CLI with 16 flags. Auto-detects best device (cuda > mps > cpu). Supports three modes: single prompt, interactive REPL (multi-turn with context truncation), and batch file. Post-load quantization and torch.compile() applied before generation.
+- **Model Registry** (`cmd_list()`, `cmd_rm()`) — Uses `huggingface_hub.scan_cache_dir()` to list/remove cached models. No separate JSON database — the HF cache is the source of truth. `cmd_rm()` collects all revision hashes and calls `strategy.execute()` after user confirmation.
+- **Modelfile** (`parse_modelfile()`) — Ollama-style config DSL parser. `Modelfile` dataclass holds model ID, system prompt, and parameters dict. Three directives: `FROM` (model), `PARAMETER key value` (sampling), `SYSTEM text` (system prompt). `--modelfile` flag overrides model, system, and sampling defaults.
+- **main** — argparse CLI with 18 flags plus `list`/`rm` subcommands. Subcommands are dispatched before argparse via `sys.argv[1]` check. Auto-detects best device (cuda > mps > cpu). Supports GGUF loading (`.gguf` extension triggers `load_gguf()`), Modelfile config (overrides args), and three generation modes: single prompt, interactive REPL, and batch file. Post-load quantization and torch.compile() applied before generation.
 
 ## Key design decisions
 
@@ -61,6 +74,10 @@ Everything is in `nanollama.py`, organized top-to-bottom as a dependency chain:
 - **Float16 stability:** Attention scores are always computed in float32 (`q.float() @ k.float()`) because MPS accumulates float16 matmuls in half-precision (unlike CUDA), which causes overflow. RMSNorm and softmax also compute in float32.
 - **Quantization is post-load.** Model loads in full precision, then `quantize_model()` replaces `nn.Linear` layers with `QuantizedLinear`. No speed benefit without custom kernels (dequantize per forward), but real memory savings.
 - **Batched pad_mask tracks cache positions**, not input positions. With left-padding, cache position 0 contains the real first token (not padding), so the mask must reflect what's actually in the cache after the KV write.
+- **GGUF dequantizes to float at load time**, not per-forward-pass. This uses more memory than keeping weights quantized, but keeps the model code simple — the Transformer class doesn't need to know about GGUF types. Post-load `--quantize` can re-compress if needed.
+- **GGUF tokenizer comes from HuggingFace** via `--tokenizer`. Implementing a full BPE tokenizer from GGUF metadata is complex and out of scope for an educational project.
+- **Model registry uses the HF cache directly** via `scan_cache_dir()` — no separate JSON database to keep in sync. The HF cache is always the source of truth.
+- **Subcommands (`list`/`rm`) dispatch before argparse** by checking `sys.argv[1]`. This avoids conflicting with `--flag` syntax since subcommands don't start with `--`.
 
 ## When adding features
 

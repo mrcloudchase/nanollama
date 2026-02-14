@@ -4,7 +4,7 @@ Features added incrementally to `nanollama.py` (currently ~750 lines). Each item
 is a self-contained exercise that teaches a new concept. Ordered by complexity —
 start from the top and work your way down.
 
-**Current state:** Phase 4 complete. Working on Phase 5.
+**Current state:** Phase 5 complete. Working on Phase 6.
 
 ---
 
@@ -289,16 +289,35 @@ start from the top and work your way down.
 
 ## Phase 5: Model Management
 
-- [ ] **Model registry** — Local JSON database of downloaded models. Support
-  `list` and `rm` subcommands.
-  - *What you'll learn*: CLI subcommands, simple database design.
+- [x] **Model registry** — List and remove cached HuggingFace models via
+  `list` and `rm` subcommands. Uses `huggingface_hub.scan_cache_dir()` directly
+  — no separate JSON database needed.
+  - *What you'll learn*: CLI subcommands, HuggingFace cache API.
+  - Output sample (`python nanollama.py list`):
+    ```
+    MODEL                                                SIZE   MODIFIED
+    ────────────────────────────────────────────────────────────────────────────────
+    deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B             3.2GB  2025-04-20 14:32
+    HuggingFaceTB/SmolLM2-1.7B-Instruct                   3.4GB  2025-04-18 09:15
+    ```
 
-- [ ] **Modelfile** — Config format (like Ollama's) to define model + system
-  prompt + sampling parameters.
+- [x] **Modelfile** — Config format (like Ollama's) to define model + system
+  prompt + sampling parameters in a single file.
   - *What you'll learn*: Configuration DSL parsing.
+  - Example Modelfile:
+    ```
+    FROM deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B
+    PARAMETER temperature 0.7
+    PARAMETER top_k 50
+    SYSTEM You are a helpful coding assistant.
+    ```
+  - Usage: `python nanollama.py --modelfile my.mf --prompt "Hello" --chat`
 
-- [ ] **GGUF loading** — Load GGUF format models (used by llama.cpp / Ollama).
-  - *What you'll learn*: Binary format parsing, GGUF structure.
+- [x] **GGUF loading** — Load GGUF format models (used by llama.cpp / Ollama).
+  Parses the binary header, reads metadata, dequantizes Q8_0/Q4_0 weights,
+  and maps GGUF tensor names to our model's state_dict keys.
+  - *What you'll learn*: Binary format parsing, GGUF structure, dequantization.
+  - Usage: `python nanollama.py --model model.gguf --tokenizer MODEL_ID --prompt "Hello" --chat`
 
 ---
 

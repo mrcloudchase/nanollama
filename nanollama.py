@@ -16,14 +16,16 @@ First run downloads the model from HuggingFace (~3GB). Subsequent runs use the c
 import argparse
 import json
 import math
+import struct
+import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from huggingface_hub import snapshot_download
+from huggingface_hub import scan_cache_dir, snapshot_download
 from safetensors.torch import load_file
 from transformers import AutoTokenizer
 
@@ -360,6 +362,238 @@ def load_model(model_id: str, device: str = "cpu", dtype: torch.dtype = torch.fl
     dtype_str = {torch.float32: "float32", torch.float16: "float16",
                  torch.bfloat16: "bfloat16"}.get(dtype, str(dtype))
     print(f"Loaded {cfg.num_hidden_layers} layers, {params / 1e9:.1f}B params on {device} ({dtype_str})")
+    return model, tokenizer
+
+
+# ── GGUF Loading ──────────────────────────────────────────────────────────
+# Load models in GGUF format (used by llama.cpp / Ollama). Parses the binary
+# header, reads metadata and tensor info, dequantizes Q8_0/Q4_0 weights,
+# and maps GGUF tensor names to our Transformer's state_dict keys.
+
+import numpy as np
+
+# Metadata value type IDs → (struct format, element_size). None = special handling.
+_GGUF_TYPES = {
+    0: ("B", 1),    # UINT8
+    1: ("b", 1),    # INT8
+    2: ("<H", 2),   # UINT16
+    3: ("<h", 2),   # INT16
+    4: ("<I", 4),   # UINT32
+    5: ("<i", 4),   # INT32
+    6: ("<f", 4),   # FLOAT32
+    7: ("?", 1),    # BOOL
+    8: None,         # STRING
+    9: None,         # ARRAY
+    10: ("<Q", 8),  # UINT64
+    11: ("<q", 8),  # INT64
+    12: ("<d", 8),  # FLOAT64
+}
+
+# Tensor type IDs → (element_bits, block_size). block_size=1 means no blocking.
+_GGUF_TENSOR_TYPES = {
+    0: (32, 1),   # F32
+    1: (16, 1),   # F16
+    2: (4, 32),   # Q4_0: 2 + 16 bytes per 32 elements
+    8: (8, 32),   # Q8_0: 2 + 32 bytes per 32 elements
+}
+
+
+def _read_gguf_string(f):
+    """Read a GGUF string: uint64 length followed by that many bytes."""
+    length = struct.unpack("<Q", f.read(8))[0]
+    return f.read(length).decode("utf-8")
+
+
+def _read_gguf_value(f, type_id):
+    """Read a typed metadata value. Handles strings, arrays, and primitives."""
+    if type_id == 8:  # STRING
+        return _read_gguf_string(f)
+    if type_id == 9:  # ARRAY
+        elem_type = struct.unpack("<I", f.read(4))[0]
+        count = struct.unpack("<Q", f.read(8))[0]
+        return [_read_gguf_value(f, elem_type) for _ in range(count)]
+    fmt, size = _GGUF_TYPES[type_id]
+    return struct.unpack(fmt, f.read(size))[0]
+
+
+def _dequant_q8_0(data, shape):
+    """Dequantize Q8_0 blocks: 2-byte f16 scale + 32 int8 values per block.
+
+    Each 34-byte block encodes 32 elements: scale * int8_value.
+    """
+    block_size = 34  # 2 bytes scale + 32 bytes data
+    n_elements = 1
+    for d in shape:
+        n_elements *= d
+    n_blocks = n_elements // 32
+    blocks = np.frombuffer(data[:n_blocks * block_size], dtype=np.uint8).reshape(n_blocks, block_size)
+    # Extract f16 scale (first 2 bytes of each block)
+    scales = blocks[:, :2].copy().view(np.float16).astype(np.float32)  # [n_blocks, 1]
+    # Extract int8 values (remaining 32 bytes)
+    values = blocks[:, 2:].view(np.int8).astype(np.float32)  # [n_blocks, 32]
+    return (values * scales).reshape(shape)
+
+
+def _dequant_q4_0(data, shape):
+    """Dequantize Q4_0 blocks: 2-byte f16 scale + 16 packed uint8 (32 nibbles) per block.
+
+    Each 18-byte block encodes 32 elements. Two 4-bit signed values are packed
+    per byte. Values are offset by -8 (the Q4_0 zero-point).
+    """
+    block_size = 18  # 2 bytes scale + 16 bytes packed data
+    n_elements = 1
+    for d in shape:
+        n_elements *= d
+    n_blocks = n_elements // 32
+    blocks = np.frombuffer(data[:n_blocks * block_size], dtype=np.uint8).reshape(n_blocks, block_size)
+    scales = blocks[:, :2].copy().view(np.float16).astype(np.float32)  # [n_blocks, 1]
+    packed = blocks[:, 2:]  # [n_blocks, 16]
+    # Unpack: low nibble first, high nibble second
+    low = (packed & 0x0F).astype(np.float32) - 8.0
+    high = (packed >> 4).astype(np.float32) - 8.0
+    # Interleave: for each byte, low nibble comes first
+    values = np.stack([low, high], axis=-1).reshape(n_blocks, 32)
+    return (values * scales).reshape(shape)
+
+
+def _map_gguf_name(name: str) -> str:
+    """Convert GGUF tensor names to our Transformer's state_dict keys.
+
+    GGUF uses names like 'blk.0.attn_q.weight'; we use 'layers.0.self_attn.q_proj.weight'.
+    """
+    # Token embedding and output
+    name = name.replace("token_embd", "embed_tokens")
+    name = name.replace("output_norm", "norm")
+    name = name.replace("output.", "lm_head.")
+    # Block prefix
+    name = name.replace("blk.", "layers.")
+    # Attention
+    name = name.replace(".attn_q.", ".self_attn.q_proj.")
+    name = name.replace(".attn_k.", ".self_attn.k_proj.")
+    name = name.replace(".attn_v.", ".self_attn.v_proj.")
+    name = name.replace(".attn_output.", ".self_attn.o_proj.")
+    name = name.replace(".attn_norm.", ".input_layernorm.")
+    # FFN
+    name = name.replace(".ffn_gate.", ".mlp.gate_proj.")
+    name = name.replace(".ffn_up.", ".mlp.up_proj.")
+    name = name.replace(".ffn_down.", ".mlp.down_proj.")
+    name = name.replace(".ffn_norm.", ".post_attention_layernorm.")
+    return name
+
+
+def load_gguf(path: str, device: str = "cpu", dtype: torch.dtype = torch.float32,
+              tokenizer_id: str | None = None):
+    """Load a GGUF model file. Returns (model, tokenizer).
+
+    GGUF files don't contain tokenizer data usable by Python, so a HuggingFace
+    tokenizer must be provided via tokenizer_id.
+    """
+    if tokenizer_id is None:
+        raise ValueError("--tokenizer is required for GGUF files (GGUF doesn't include a Python-usable tokenizer)")
+
+    with open(path, "rb") as f:
+        # ── Header ────────────────────────────────────────────────────────
+        magic = f.read(4)
+        if magic != b"GGUF":
+            raise ValueError(f"Not a GGUF file (magic: {magic!r})")
+        version = struct.unpack("<I", f.read(4))[0]
+        if version not in (2, 3):
+            raise ValueError(f"Unsupported GGUF version: {version}")
+        n_tensors = struct.unpack("<Q", f.read(8))[0]
+        n_metadata = struct.unpack("<Q", f.read(8))[0]
+
+        # ── Metadata ──────────────────────────────────────────────────────
+        metadata = {}
+        for _ in range(n_metadata):
+            key = _read_gguf_string(f)
+            value_type = struct.unpack("<I", f.read(4))[0]
+            value = _read_gguf_value(f, value_type)
+            metadata[key] = value
+
+        # Extract architecture prefix (e.g., "llama", "qwen2")
+        arch = metadata.get("general.architecture", "llama")
+
+        # Build Config from metadata
+        def meta(key, default=None):
+            return metadata.get(f"{arch}.{key}", metadata.get(key, default))
+
+        cfg = Config(
+            vocab_size=meta("vocab_size", 32000),
+            hidden_size=meta("embedding_length", 2048),
+            intermediate_size=meta("feed_forward_length", 5632),
+            num_hidden_layers=meta("block_count", 22),
+            num_attention_heads=meta("attention.head_count", 32),
+            num_key_value_heads=meta("attention.head_count_kv", 4),
+            max_position_embeddings=meta("context_length", 2048),
+            rms_norm_eps=meta("attention.layer_norm_rms_epsilon", 1e-5),
+            rope_theta=meta("rope.freq_base", 10000.0),
+        )
+
+        # ── Tensor info ───────────────────────────────────────────────────
+        tensor_infos = []
+        for _ in range(n_tensors):
+            name = _read_gguf_string(f)
+            n_dims = struct.unpack("<I", f.read(4))[0]
+            dims = [struct.unpack("<Q", f.read(8))[0] for _ in range(n_dims)]
+            tensor_type = struct.unpack("<I", f.read(4))[0]
+            offset = struct.unpack("<Q", f.read(8))[0]
+            tensor_infos.append((name, dims, tensor_type, offset))
+
+        # ── Tensor data ───────────────────────────────────────────────────
+        # Data section is aligned to 32 bytes from file start
+        data_offset = f.tell()
+        alignment = metadata.get("general.alignment", 32)
+        if data_offset % alignment != 0:
+            data_offset += alignment - (data_offset % alignment)
+
+        weights = {}
+        for name, dims, tensor_type, offset in tensor_infos:
+            mapped_name = _map_gguf_name(name)
+            shape = tuple(reversed(dims))  # GGUF stores dimensions in reverse order
+            n_elements = 1
+            for d in shape:
+                n_elements *= d
+
+            f.seek(data_offset + offset)
+
+            if tensor_type == 0:  # F32
+                raw = f.read(n_elements * 4)
+                arr = np.frombuffer(raw, dtype=np.float32).reshape(shape)
+            elif tensor_type == 1:  # F16
+                raw = f.read(n_elements * 2)
+                arr = np.frombuffer(raw, dtype=np.float16).astype(np.float32).reshape(shape)
+            elif tensor_type == 2:  # Q4_0
+                n_blocks = n_elements // 32
+                raw = f.read(n_blocks * 18)
+                arr = _dequant_q4_0(raw, shape)
+            elif tensor_type == 8:  # Q8_0
+                n_blocks = n_elements // 32
+                raw = f.read(n_blocks * 34)
+                arr = _dequant_q8_0(raw, shape)
+            else:
+                print(f"  Skipping {name}: unsupported tensor type {tensor_type}")
+                continue
+
+            weights[mapped_name] = torch.from_numpy(arr.copy())
+
+    # Tie embeddings if lm_head is missing
+    if "lm_head.weight" not in weights and "embed_tokens.weight" in weights:
+        weights["lm_head.weight"] = weights["embed_tokens.weight"]
+
+    # Auto-detect QKV bias
+    if "layers.0.self_attn.q_proj.bias" in weights:
+        cfg.attention_bias = True
+
+    model = Transformer(cfg)
+    model.load_state_dict(weights, strict=False)
+    model.to(dtype=dtype, device=device).eval()
+
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_id)
+
+    params = sum(p.numel() for p in model.parameters())
+    dtype_str = {torch.float32: "float32", torch.float16: "float16",
+                 torch.bfloat16: "bfloat16"}.get(dtype, str(dtype))
+    print(f"Loaded GGUF: {cfg.num_hidden_layers} layers, {params / 1e9:.1f}B params on {device} ({dtype_str})")
     return model, tokenizer
 
 
@@ -888,7 +1122,105 @@ def auto_device() -> str:
     return "cpu"
 
 
+# ── Model Registry ────────────────────────────────────────────────────────
+# List and remove cached HuggingFace models. Uses huggingface_hub's cache
+# scanner directly — no separate JSON database needed.
+
+def cmd_list():
+    """List all cached HuggingFace models with size and last modified time."""
+    from datetime import datetime
+    info = scan_cache_dir()
+    repos = sorted(info.repos, key=lambda r: r.last_modified, reverse=True)
+    if not repos:
+        print("No cached models found.")
+        return
+    print(f"{'MODEL':<50} {'SIZE':>10} {'MODIFIED'}")
+    print("─" * 80)
+    for repo in repos:
+        if repo.repo_type != "model":
+            continue
+        size_gb = repo.size_on_disk / 1e9
+        ts = repo.last_modified
+        modified = datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M") if isinstance(ts, (int, float)) else str(ts)
+        print(f"{repo.repo_id:<50} {size_gb:>8.1f}GB  {modified}")
+
+def cmd_rm(model_id: str):
+    """Remove a cached model after user confirmation."""
+    info = scan_cache_dir()
+    repo = next((r for r in info.repos if r.repo_id == model_id), None)
+    if repo is None:
+        print(f"Model '{model_id}' not found in cache.")
+        return
+    size_gb = repo.size_on_disk / 1e9
+    answer = input(f"Remove {model_id} ({size_gb:.1f}GB)? [y/N] ")
+    if answer.lower() != "y":
+        print("Cancelled.")
+        return
+    strategy = info.delete_revisions(*[rev.commit_hash for rev in repo.revisions])
+    strategy.execute()
+    print(f"Removed {model_id}.")
+
+
+# ── Modelfile Parser ──────────────────────────────────────────────────────
+# Ollama-style config DSL: FROM (model), PARAMETER (sampling), SYSTEM (prompt).
+# Simple line-by-line parser — comments with #, blank lines skipped.
+
+@dataclass
+class Modelfile:
+    """Parsed Modelfile contents."""
+    model: str = ""
+    system: str = ""
+    parameters: dict = field(default_factory=dict)
+
+def parse_modelfile(path: str) -> Modelfile:
+    """Parse a Modelfile from the given path.
+
+    Supported directives:
+        FROM model_id          — HuggingFace model ID or local path
+        PARAMETER key value    — Sampling parameter (temperature, top_k, etc.)
+        SYSTEM text            — System prompt for chat mode
+    """
+    mf = Modelfile()
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = line.split(None, 1)
+            directive = parts[0].upper()
+            value = parts[1] if len(parts) > 1 else ""
+            if directive == "FROM":
+                mf.model = value
+            elif directive == "SYSTEM":
+                mf.system = value
+            elif directive == "PARAMETER":
+                kv = value.split(None, 1)
+                if len(kv) == 2:
+                    key, val = kv
+                    # Convert numeric values
+                    try:
+                        val = int(val)
+                    except ValueError:
+                        try:
+                            val = float(val)
+                        except ValueError:
+                            pass
+                    mf.parameters[key] = val
+    return mf
+
+
 if __name__ == "__main__":
+    # Subcommand dispatch: handle list/rm before argparse touches sys.argv
+    if len(sys.argv) > 1 and sys.argv[1] == "list":
+        cmd_list()
+        sys.exit(0)
+    if len(sys.argv) > 2 and sys.argv[1] == "rm":
+        cmd_rm(sys.argv[2])
+        sys.exit(0)
+    if len(sys.argv) == 2 and sys.argv[1] == "rm":
+        print("Usage: python nanollama.py rm MODEL_ID")
+        sys.exit(1)
+
     parser = argparse.ArgumentParser(description="nanollama — educational LLM inference")
     parser.add_argument("--prompt", default=None, help="input prompt")
     parser.add_argument("--model", default="deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
@@ -914,7 +1246,26 @@ if __name__ == "__main__":
                         help="start OpenAI-compatible API server instead of generating")
     parser.add_argument("--port", type=int, default=8000,
                         help="server port (default: 8000, used with --serve)")
+    parser.add_argument("--tokenizer", default=None,
+                        help="HuggingFace tokenizer ID (required for GGUF files)")
+    parser.add_argument("--modelfile", default=None,
+                        help="path to a Modelfile config (overrides model, system, sampling params)")
     args = parser.parse_args()
+
+    # Apply Modelfile overrides
+    if args.modelfile:
+        mf = parse_modelfile(args.modelfile)
+        if mf.model:
+            args.model = mf.model
+        if mf.system:
+            args.system = mf.system
+        # Map Modelfile PARAMETER names to argparse attributes
+        param_map = {"temperature": "temp", "top_k": "top_k", "top_p": "top_p",
+                     "repeat_penalty": "repeat_penalty", "max_tokens": "max_tokens"}
+        for key, val in mf.parameters.items():
+            attr = param_map.get(key, key.replace("-", "_"))
+            if hasattr(args, attr):
+                setattr(args, attr, val)
 
     if not args.interactive and not args.prompt and not args.batch_file and not args.serve:
         parser.error("--prompt is required (unless using --interactive, --batch-file, or --serve)")
@@ -922,7 +1273,10 @@ if __name__ == "__main__":
     device = args.device or auto_device()
     dtype = {"float32": torch.float32, "float16": torch.float16,
              "bfloat16": torch.bfloat16}[args.dtype]
-    model, tokenizer = load_model(args.model, device, dtype)
+    if args.model.endswith(".gguf"):
+        model, tokenizer = load_gguf(args.model, device, dtype, args.tokenizer)
+    else:
+        model, tokenizer = load_model(args.model, device, dtype)
 
     if args.quantize:
         bits = {"q8": 8, "q4": 4}[args.quantize]
