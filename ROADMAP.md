@@ -1,6 +1,6 @@
 # nanollama Roadmap
 
-Features added incrementally to `nanollama.py` (currently ~750 lines). Each item
+Features added incrementally to `nanollama.py` (currently ~1400 lines). Each item
 is a self-contained exercise that teaches a new concept. Ordered by complexity —
 start from the top and work your way down.
 
@@ -306,7 +306,8 @@ start from the top and work your way down.
   - *What you'll learn*: Configuration DSL parsing.
   - Example Modelfile:
     ```
-    FROM deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B
+    FROM Qwen/Qwen2-0.5B-Instruct-GGUF/qwen2-0_5b-instruct-q4_0.gguf
+    TOKENIZER Qwen/Qwen2-0.5B-Instruct
     PARAMETER temperature 0.7
     PARAMETER top_k 50
     SYSTEM You are a helpful coding assistant.
@@ -314,7 +315,7 @@ start from the top and work your way down.
   - Usage: `python nanollama.py --modelfile my.mf --prompt "Hello" --chat`
 
 - [x] **GGUF loading** — Load GGUF format models (used by llama.cpp / Ollama).
-  Parses the binary header, reads metadata, dequantizes Q8_0/Q4_0 weights,
+  Parses the binary header, reads metadata, dequantizes Q4_0/Q4_1/Q8_0 weights,
   and maps GGUF tensor names to our model's state_dict keys.
   - *What you'll learn*: Binary format parsing, GGUF structure, dequantization.
   - Usage: `python nanollama.py --model model.gguf --tokenizer MODEL_ID --prompt "Hello" --chat`

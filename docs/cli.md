@@ -33,7 +33,7 @@ python nanollama.py --serve [--port PORT] [--model MODEL] [--device DEVICE] [...
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--model MODEL` | `deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B` | HuggingFace model ID or local path to a downloaded model directory |
+| `--model MODEL` | `deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B` | HuggingFace model ID, local path, or GGUF file (local path or `org/repo/file.gguf` for auto-download) |
 | `--device DEVICE` | auto-detected | Compute device: `cpu`, `cuda` (NVIDIA GPU), or `mps` (Apple Silicon). Auto-detection priority: cuda > mps > cpu |
 | `--temp TEMP` | `0.7` | Sampling temperature. Controls randomness: `0` = greedy (always pick the most likely token), `0.7` = balanced, `1.5` = creative. Higher values flatten the probability distribution |
 | `--top-k TOP_K` | `50` | Top-k filtering. Keep only the k most likely tokens before sampling. Set to `0` to disable. Lower values = more focused output |
@@ -47,7 +47,7 @@ python nanollama.py --serve [--port PORT] [--model MODEL] [--device DEVICE] [...
 | `--compile` | off | Use `torch.compile()` for automatic kernel fusion. First forward pass is slow (compilation), subsequent passes are faster |
 | `--port PORT` | `8000` | Server port (used with `--serve`) |
 | `--tokenizer MODEL_ID` | none | HuggingFace tokenizer ID. Required when loading GGUF files (GGUF doesn't include a Python-usable tokenizer) |
-| `--modelfile PATH` | none | Path to a Modelfile config. Overrides `--model`, `--system`, and sampling defaults with values from the file |
+| `--modelfile PATH` | none | Path to a Modelfile config. Overrides `--model`, `--tokenizer`, `--system`, and sampling defaults with values from the file |
 
 ## Examples
 
@@ -193,17 +193,24 @@ Remove a cached model:
 python nanollama.py rm deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B
 ```
 
-Load a GGUF model (requires a HuggingFace tokenizer):
+Load a GGUF model (local file, requires a HuggingFace tokenizer):
 
 ```bash
 python nanollama.py --model path/to/model.gguf --tokenizer deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B --prompt "Hello" --chat --dtype float16
+```
+
+Load a GGUF model (auto-download from HuggingFace):
+
+```bash
+python nanollama.py --model Qwen/Qwen2-0.5B-Instruct-GGUF/qwen2-0_5b-instruct-q4_0.gguf --tokenizer Qwen/Qwen2-0.5B-Instruct --prompt "Hello" --chat --dtype float16
 ```
 
 Use a Modelfile config:
 
 ```bash
 # my.mf:
-# FROM deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B
+# FROM Qwen/Qwen2-0.5B-Instruct-GGUF/qwen2-0_5b-instruct-q4_0.gguf
+# TOKENIZER Qwen/Qwen2-0.5B-Instruct
 # PARAMETER temperature 0.7
 # PARAMETER top_k 50
 # SYSTEM You are a helpful coding assistant.

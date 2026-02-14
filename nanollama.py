@@ -1,5 +1,5 @@
 """
-nanollama.py — An educational LLM inference engine in ~1000 lines of PyTorch.
+nanollama.py — An educational LLM inference engine in ~1400 lines of PyTorch.
 
 Loads a LLaMA/Qwen2-architecture model from HuggingFace and generates text.
 Every component of the transformer is implemented from scratch so you
@@ -367,7 +367,7 @@ def load_model(model_id: str, device: str = "cpu", dtype: torch.dtype = torch.fl
 
 # ── GGUF Loading ──────────────────────────────────────────────────────────
 # Load models in GGUF format (used by llama.cpp / Ollama). Parses the binary
-# header, reads metadata and tensor info, dequantizes Q8_0/Q4_0 weights,
+# header, reads metadata and tensor info, dequantizes Q4_0/Q4_1/Q8_0 weights,
 # and maps GGUF tensor names to our Transformer's state_dict keys.
 
 import numpy as np

@@ -7,7 +7,7 @@
 [![Python 3.13](https://img.shields.io/badge/python-3.13-blue.svg)](https://www.python.org/downloads/)
 [![GitHub stars](https://img.shields.io/github/stars/mrcloudchase/nanollama)](https://github.com/mrcloudchase/nanollama/stargazers)
 
-An educational LLM inference engine in ~1300 lines of PyTorch.
+An educational LLM inference engine in ~1400 lines of PyTorch.
 
 nanollama is a single-file, from-scratch implementation of LLM inference. It loads a real model from HuggingFace, runs the full transformer forward pass, and generates text — all in code you can read top to bottom in one sitting.
 
@@ -26,8 +26,8 @@ By reading `nanollama.py`, you'll understand:
 - **Quantization** — How Q8/Q4 integer quantization saves memory (per-channel absmax, 4-bit packing)
 - **Batched inference** — How left-padding, position IDs, and padding masks enable multi-prompt generation
 - **API server** — How to build an OpenAI-compatible HTTP API with FastAPI and SSE streaming
-- **GGUF loading** — How to parse GGUF binary format, dequantize Q4_0/Q8_0 weights, and map tensor names
-- **Modelfile config** — How Ollama-style DSL configs work (FROM, PARAMETER, SYSTEM directives)
+- **GGUF loading** — How to parse GGUF binary format, dequantize Q4_0/Q4_1/Q8_0 weights, and map tensor names
+- **Modelfile config** — How Ollama-style DSL configs work (FROM, TOKENIZER, PARAMETER, SYSTEM directives)
 - **Model management** — How HuggingFace's cache system works (listing, removing cached models)
 
 ## Quick start
@@ -62,12 +62,12 @@ See [docs/cli.md](docs/cli.md) for the full CLI reference, all flags, and exampl
 | `Chat Template` | ~30 | Jinja2 template rendering for any model's chat format |
 | `generate` | ~80 | Prefill/decode loop with streaming and sampling |
 | `generate_streaming` | ~65 | Generator variant of generate() that yields token deltas |
-| `API Server` | ~145 | FastAPI app factory, OpenAI-compatible endpoints, SSE streaming |
+| `API Server` | ~180 | FastAPI app factory, OpenAI-compatible endpoints, SSE streaming |
 | `generate_batch` | ~135 | Batched generation with left-padding and per-sequence tracking |
 | `Model Registry` | ~35 | List/remove cached models via HuggingFace cache API |
-| `Modelfile` | ~55 | Ollama-style config parser (FROM, PARAMETER, SYSTEM) |
-| `GGUF Loading` | ~200 | Binary format parsing, Q4_0/Q8_0 dequantization, tensor name mapping |
-| `main` | ~145 | Device detection, argparse CLI, subcommands, interactive/batch/serve modes |
+| `Modelfile` | ~50 | Ollama-style config parser (FROM, TOKENIZER, PARAMETER, SYSTEM) |
+| `GGUF Loading` | ~280 | Binary format parsing, Q4_0/Q4_1/Q8_0 dequantization, tensor name mapping |
+| `main` | ~160 | Device detection, argparse CLI, subcommands, interactive/batch/serve modes |
 
 ## How it compares to Ollama
 
@@ -78,7 +78,7 @@ See [docs/cli.md](docs/cli.md) for the full CLI reference, all flags, and exampl
 | Quantization | GGUF Q4/Q8/etc. | Float16/Q8/Q4 |
 | Model format | GGUF | HuggingFace safetensors + GGUF |
 | API server | Yes (OpenAI-compatible) | Yes (OpenAI-compatible) |
-| Code size | ~100K lines | ~1300 lines |
+| Code size | ~100K lines | ~1400 lines |
 | Goal | Production inference | Learning |
 
 ## What's next
