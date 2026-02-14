@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-nanollama is an educational LLM inference engine in a single file (`nanollama.py`, ~750 lines). It implements a LLaMA/Qwen2-architecture transformer from scratch in PyTorch to teach how LLM inference works. It is intentionally minimal — see ROADMAP.md for features to add incrementally.
+nanollama is an educational LLM inference engine in a single file (`nanollama.py`, ~1000 lines). It implements a LLaMA/Qwen2-architecture transformer from scratch in PyTorch to teach how LLM inference works. It is intentionally minimal — see ROADMAP.md for features to add incrementally.
 
 ## Commands
 
@@ -19,6 +19,7 @@ python nanollama.py --interactive --system "You are a helpful assistant."
 python nanollama.py --batch-file prompts.txt --chat --dtype float16
 python nanollama.py --prompt "text" --chat --quantize q8
 python nanollama.py --prompt "text" --chat --compile
+python nanollama.py --serve --dtype float16 --port 8000
 ```
 
 No tests, no linter, no build step. It's a single-file script.
@@ -42,11 +43,13 @@ Everything is in `nanollama.py`, organized top-to-bottom as a dependency chain:
 
 - **load_model()** — Downloads from HuggingFace Hub via `snapshot_download`, loads safetensors weights, strips `model.` prefix from weight names. Auto-detects tied embeddings (copies `embed_tokens` to `lm_head` if missing) and QKV bias (Qwen2). Accepts `dtype` parameter (float32/float16/bfloat16) for model conversion. Returns `(model, tokenizer)`.
 - **Chat Template** (`apply_chat_template()`) — Renders conversation messages using the model's Jinja2 chat template from `tokenizer_config.json`. Handles `bos_token`, `eos_token`, and `add_generation_prompt`. Falls back to hardcoded ChatML format if no template found.
+- **generate_streaming()** — Generator variant of `generate()` that yields `{"text", "token_id", "finish_reason"}` dicts instead of printing. Same prefill + decode + sampling logic. Used by the API server for both streaming and non-streaming responses.
 - **generate()** — Two-phase single-prompt generation loop:
   - *Prefill*: Process entire prompt in one forward pass (start_pos=0), populates KV-cache for all prompt positions.
   - *Decode*: Generate tokens one at a time. Each step feeds only the new token (start_pos increments), KV-cache provides context. Inner `sample()` function applies: repetition penalty → temperature scaling → top-k filtering → top-p nucleus sampling → multinomial/argmax. Streams each token to stdout by decoding the full generated sequence each step for correct tokenizer spacing.
 - **generate_batch()** — Batched multi-prompt generation. Left-pads all prompts to same length. Constructs per-token `position_ids` for correct RoPE despite padding. Builds `pad_mask` indexed by cache positions (not input positions). During decode, each sequence tracks its own cache position independently to avoid position gaps.
-- **main** — argparse CLI with 14 flags. Auto-detects best device (cuda > mps > cpu). Supports three modes: single prompt, interactive REPL (multi-turn with context truncation), and batch file. Post-load quantization and torch.compile() applied before generation.
+- **API Server** (`create_app()`) — FastAPI app factory that returns an OpenAI-compatible HTTP server. Endpoints: `POST /v1/chat/completions` (chat with streaming), `POST /v1/completions` (text completion with streaming), `GET /v1/models` (list loaded model). Request/response schemas use Pydantic models matching OpenAI's format. An `asyncio.Lock` serializes model access since the KV-cache is mutable shared state. Streaming uses SSE (`data: {json}\n\n` chunks, ending with `data: [DONE]\n\n`). Generation runs in a thread pool via `asyncio.to_thread` to avoid blocking the event loop.
+- **main** — argparse CLI with 16 flags. Auto-detects best device (cuda > mps > cpu). Supports three modes: single prompt, interactive REPL (multi-turn with context truncation), and batch file. Post-load quantization and torch.compile() applied before generation.
 
 ## Key design decisions
 

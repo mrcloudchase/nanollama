@@ -1,5 +1,5 @@
 """
-nanollama.py — An educational LLM inference engine in ~750 lines of PyTorch.
+nanollama.py — An educational LLM inference engine in ~1000 lines of PyTorch.
 
 Loads a LLaMA/Qwen2-architecture model from HuggingFace and generates text.
 Every component of the transformer is implemented from scratch so you
@@ -8,6 +8,7 @@ can see exactly how LLMs work at the tensor level.
 Usage:
     python nanollama.py --prompt "Once upon a time"
     python nanollama.py --prompt "What is 2+2?" --chat --dtype float16
+    python nanollama.py --serve --dtype float16 --port 8000
 
 First run downloads the model from HuggingFace (~3GB). Subsequent runs use the cache.
 """
@@ -478,6 +479,269 @@ def generate(model, tokenizer, prompt: str, max_tokens: int = 200,
     return tokenizer.decode(generated, skip_special_tokens=True)
 
 
+def generate_streaming(model, tokenizer, prompt: str, max_tokens: int = 200,
+                       temperature: float = 0.7, top_k: int = 0, top_p: float = 1.0,
+                       repeat_penalty: float = 1.0, add_bos: bool = True):
+    """Generate text, yielding each new text fragment as it's produced.
+
+    Yields dicts: {"text": delta_text, "token_id": int, "finish_reason": None|"stop"|"length"}
+    Same prefill + decode loop as generate(), but yields instead of printing.
+    """
+    device = next(model.parameters()).device
+    ids = tokenizer.encode(prompt, add_special_tokens=False)
+    if add_bos:
+        ids = [tokenizer.bos_token_id] + ids
+    tokens = torch.tensor([ids], dtype=torch.long, device=device)
+    model.reset()
+
+    # Prefill: process entire prompt at once
+    with torch.no_grad():
+        logits = model(tokens, start_pos=0)
+
+    def sample(logits, token_history):
+        logits = logits.clone()
+        if repeat_penalty != 1.0 and token_history:
+            for tid in set(token_history):
+                if logits[0, tid] > 0:
+                    logits[0, tid] /= repeat_penalty
+                else:
+                    logits[0, tid] *= repeat_penalty
+        if temperature == 0:
+            return logits.argmax(-1).item()
+        logits = logits / temperature
+        if top_k > 0:
+            top_values, _ = torch.topk(logits, min(top_k, logits.size(-1)))
+            logits[logits < top_values[:, -1, None]] = float("-inf")
+        if top_p < 1.0:
+            sorted_logits, sorted_idx = torch.sort(logits, descending=True)
+            cumulative_probs = torch.softmax(sorted_logits, dim=-1).cumsum(dim=-1)
+            remove = cumulative_probs - torch.softmax(sorted_logits, dim=-1) >= top_p
+            sorted_logits[remove] = float("-inf")
+            logits = torch.zeros_like(sorted_logits).scatter(-1, sorted_idx, sorted_logits)
+        return torch.multinomial(F.softmax(logits, dim=-1), 1).item()
+
+    # First generated token
+    next_id = sample(logits[:, -1], ids)
+    generated = [next_id]
+    prev_text = ""
+    text = tokenizer.decode(generated, skip_special_tokens=True)
+    delta = text
+    prev_text = text
+
+    if next_id == tokenizer.eos_token_id:
+        yield {"text": delta, "token_id": next_id, "finish_reason": "stop"}
+        return
+    yield {"text": delta, "token_id": next_id, "finish_reason": None}
+
+    # Decode: generate one token at a time using KV cache
+    for i in range(1, max_tokens):
+        inp = torch.tensor([[next_id]], dtype=torch.long, device=device)
+        with torch.no_grad():
+            logits = model(inp, start_pos=len(ids) + i - 1)
+        next_id = sample(logits[:, -1], ids + generated)
+        generated.append(next_id)
+
+        text = tokenizer.decode(generated, skip_special_tokens=True)
+        delta = text[len(prev_text):]
+        prev_text = text
+
+        if next_id == tokenizer.eos_token_id:
+            yield {"text": delta, "token_id": next_id, "finish_reason": "stop"}
+            return
+        if i == max_tokens - 1:
+            yield {"text": delta, "token_id": next_id, "finish_reason": "length"}
+            return
+        yield {"text": delta, "token_id": next_id, "finish_reason": None}
+
+
+# ── API Server ─────────────────────────────────────────────────────────────
+# OpenAI-compatible HTTP API so external tools (LangChain, Open WebUI, curl)
+# can use nanollama as a drop-in local LLM backend.
+# An asyncio.Lock serializes requests — the model has mutable KV-cache state
+# that can't be shared across concurrent generations.
+
+def create_app(model, tokenizer):
+    """Create a FastAPI app with OpenAI-compatible endpoints."""
+    import asyncio
+    import uuid
+
+    from fastapi import FastAPI
+    from fastapi.responses import StreamingResponse
+    from pydantic import BaseModel
+
+    app = FastAPI(title="nanollama", description="OpenAI-compatible API for nanollama")
+    model_lock = asyncio.Lock()
+
+    # Determine the model name from the tokenizer (or fall back to a generic name)
+    model_name = getattr(tokenizer, "name_or_path", "nanollama")
+
+    # ── Request/Response Schemas ──────────────────────────────────────────
+
+    class ChatMessage(BaseModel):
+        role: str
+        content: str
+
+    class ChatCompletionRequest(BaseModel):
+        messages: list[ChatMessage]
+        model: str | None = None
+        temperature: float = 0.7
+        max_tokens: int = 200
+        top_p: float = 0.9
+        top_k: int = 50
+        repeat_penalty: float = 1.1
+        stream: bool = False
+
+    class CompletionRequest(BaseModel):
+        prompt: str
+        model: str | None = None
+        temperature: float = 0.7
+        max_tokens: int = 200
+        top_p: float = 0.9
+        top_k: int = 50
+        repeat_penalty: float = 1.1
+        stream: bool = False
+
+    # ── Endpoints ─────────────────────────────────────────────────────────
+
+    @app.get("/v1/models")
+    async def list_models():
+        return {
+            "object": "list",
+            "data": [{
+                "id": model_name,
+                "object": "model",
+                "owned_by": "nanollama",
+            }],
+        }
+
+    @app.post("/v1/chat/completions")
+    async def chat_completions(request: ChatCompletionRequest):
+        messages = [{"role": m.role, "content": m.content} for m in request.messages]
+        prompt = apply_chat_template(messages, tokenizer)
+        sampling = dict(
+            max_tokens=request.max_tokens, temperature=request.temperature,
+            top_k=request.top_k, top_p=request.top_p,
+            repeat_penalty=request.repeat_penalty, add_bos=False,
+        )
+
+        if request.stream:
+            return StreamingResponse(
+                _stream_chat(prompt, sampling, request.model or model_name),
+                media_type="text/event-stream",
+            )
+
+        async with model_lock:
+            result = await asyncio.to_thread(
+                generate, model, tokenizer, prompt, **sampling
+            )
+
+        completion_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
+        prompt_tokens = len(tokenizer.encode(prompt, add_special_tokens=False))
+        completion_tokens = len(tokenizer.encode(result, add_special_tokens=False))
+        return {
+            "id": completion_id,
+            "object": "chat.completion",
+            "created": int(time.time()),
+            "model": request.model or model_name,
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": result},
+                "finish_reason": "stop",
+            }],
+            "usage": {
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": prompt_tokens + completion_tokens,
+            },
+        }
+
+    @app.post("/v1/completions")
+    async def completions(request: CompletionRequest):
+        sampling = dict(
+            max_tokens=request.max_tokens, temperature=request.temperature,
+            top_k=request.top_k, top_p=request.top_p,
+            repeat_penalty=request.repeat_penalty, add_bos=True,
+        )
+
+        if request.stream:
+            return StreamingResponse(
+                _stream_completion(request.prompt, sampling, request.model or model_name),
+                media_type="text/event-stream",
+            )
+
+        async with model_lock:
+            result = await asyncio.to_thread(
+                generate, model, tokenizer, request.prompt, **sampling
+            )
+
+        completion_id = f"cmpl-{uuid.uuid4().hex[:8]}"
+        prompt_tokens = len(tokenizer.encode(request.prompt, add_special_tokens=False))
+        completion_tokens = len(tokenizer.encode(result, add_special_tokens=False))
+        return {
+            "id": completion_id,
+            "object": "text_completion",
+            "created": int(time.time()),
+            "model": request.model or model_name,
+            "choices": [{
+                "index": 0,
+                "text": result,
+                "finish_reason": "stop",
+            }],
+            "usage": {
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": prompt_tokens + completion_tokens,
+            },
+        }
+
+    # ── SSE Streaming Helpers ─────────────────────────────────────────────
+    # OpenAI SSE format: each chunk is "data: {json}\n\n", ending with "data: [DONE]\n\n"
+
+    async def _stream_chat(prompt, sampling, req_model):
+        completion_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
+        created = int(time.time())
+        async with model_lock:
+            for chunk in await asyncio.to_thread(
+                lambda: list(generate_streaming(model, tokenizer, prompt, **sampling))
+            ):
+                data = {
+                    "id": completion_id,
+                    "object": "chat.completion.chunk",
+                    "created": created,
+                    "model": req_model,
+                    "choices": [{
+                        "index": 0,
+                        "delta": {"content": chunk["text"]},
+                        "finish_reason": chunk["finish_reason"],
+                    }],
+                }
+                yield f"data: {json.dumps(data)}\n\n"
+        yield "data: [DONE]\n\n"
+
+    async def _stream_completion(prompt, sampling, req_model):
+        completion_id = f"cmpl-{uuid.uuid4().hex[:8]}"
+        created = int(time.time())
+        async with model_lock:
+            for chunk in await asyncio.to_thread(
+                lambda: list(generate_streaming(model, tokenizer, prompt, **sampling))
+            ):
+                data = {
+                    "id": completion_id,
+                    "object": "text_completion",
+                    "created": created,
+                    "model": req_model,
+                    "choices": [{
+                        "index": 0,
+                        "text": chunk["text"],
+                        "finish_reason": chunk["finish_reason"],
+                    }],
+                }
+                yield f"data: {json.dumps(data)}\n\n"
+        yield "data: [DONE]\n\n"
+
+    return app
+
+
 # ── Batched Generation ────────────────────────────────────────────────────
 # Process multiple prompts in a single forward pass for higher throughput.
 # Left-pad shorter prompts so all sequences align on the right (the generation
@@ -646,10 +910,14 @@ if __name__ == "__main__":
                         help="use torch.compile() for kernel fusion (slower first run, faster generation)")
     parser.add_argument("--batch-file", default=None,
                         help="file with one prompt per line for batched generation")
+    parser.add_argument("--serve", action="store_true",
+                        help="start OpenAI-compatible API server instead of generating")
+    parser.add_argument("--port", type=int, default=8000,
+                        help="server port (default: 8000, used with --serve)")
     args = parser.parse_args()
 
-    if not args.interactive and not args.prompt and not args.batch_file:
-        parser.error("--prompt is required (unless using --interactive or --batch-file)")
+    if not args.interactive and not args.prompt and not args.batch_file and not args.serve:
+        parser.error("--prompt is required (unless using --interactive, --batch-file, or --serve)")
 
     device = args.device or auto_device()
     dtype = {"float32": torch.float32, "float16": torch.float16,
@@ -672,7 +940,13 @@ if __name__ == "__main__":
                     top_k=args.top_k, top_p=args.top_p,
                     repeat_penalty=args.repeat_penalty)
 
-    if args.interactive:
+    if args.serve:
+        import uvicorn
+        app = create_app(model, tokenizer)
+        print(f"\nStarting server on http://0.0.0.0:{args.port}")
+        print(f"OpenAI-compatible API: http://localhost:{args.port}/v1/chat/completions")
+        uvicorn.run(app, host="0.0.0.0", port=args.port)
+    elif args.interactive:
         # REPL loop with multi-turn history. Implies --chat.
         # Each turn appends to the conversation and re-renders the full
         # template so the model sees the entire context. If the conversation

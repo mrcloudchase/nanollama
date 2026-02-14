@@ -4,7 +4,7 @@ Features added incrementally to `nanollama.py` (currently ~750 lines). Each item
 is a self-contained exercise that teaches a new concept. Ordered by complexity —
 start from the top and work your way down.
 
-**Current state:** Phase 3 complete. Working on Phase 4.
+**Current state:** Phase 4 complete. Working on Phase 5.
 
 ---
 
@@ -254,17 +254,35 @@ start from the top and work your way down.
 
 ## Phase 4: API Server
 
-- [ ] **FastAPI server** — HTTP API with a `/v1/completions` endpoint.
+- [x] **FastAPI server** — HTTP API with `/v1/completions` and `/v1/chat/completions`
+  endpoints, plus `/v1/models`. Started with `--serve` flag.
   - *What you'll learn*: REST APIs, request schemas, async Python.
+  - Usage: `python nanollama.py --serve --dtype float16 --port 8000`
+  - Output sample:
+    ```
+    Starting server on http://0.0.0.0:8000
+    OpenAI-compatible API: http://localhost:8000/v1/chat/completions
+    ```
 
-- [ ] **SSE streaming** — Stream tokens via Server-Sent Events.
+- [x] **SSE streaming** — Stream tokens via Server-Sent Events when `stream=true`.
   - *What you'll learn*: SSE protocol, chunked responses, OpenAI streaming format.
+  - Each chunk is `data: {json}\n\n` matching OpenAI's format, ending with
+    `data: [DONE]\n\n`.
+  - Output sample (`curl ... -d '{"messages":[...],"stream":true}'`):
+    ```
+    data: {"id":"chatcmpl-a1b2c3d4","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"The"},"finish_reason":null}]}
 
-- [ ] **OpenAI-compatible API** — Full `/v1/chat/completions` compatibility so
-  existing tools (LangChain, etc.) work out of the box.
-  - *What you'll learn*: API design, compatibility layers.
+    data: {"id":"chatcmpl-a1b2c3d4","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":" capital"},"finish_reason":null}]}
 
-- [ ] **Request queuing** — Handle concurrent requests with a queue/worker pattern.
+    data: [DONE]
+    ```
+
+- [x] **OpenAI-compatible API** — Full `/v1/chat/completions` compatibility so
+  existing tools (LangChain, Open WebUI, curl) work as a drop-in backend.
+  - *What you'll learn*: API design, Pydantic models, compatibility layers.
+
+- [x] **Request queuing** — `asyncio.Lock` serializes model access so concurrent
+  requests queue safely (the model's KV-cache is mutable shared state).
   - *What you'll learn*: Concurrency, asyncio, resource management.
 
 ---

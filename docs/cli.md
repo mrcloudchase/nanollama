@@ -7,6 +7,7 @@ python nanollama.py --prompt PROMPT [--chat] [--model MODEL] [--device DEVICE]
                     [--repeat-penalty PENALTY] [--max-tokens MAX_TOKENS]
 python nanollama.py --interactive [--model MODEL] [--device DEVICE] [...]
 python nanollama.py --batch-file FILE [--chat] [--model MODEL] [...]
+python nanollama.py --serve [--port PORT] [--model MODEL] [--device DEVICE] [...]
 ```
 
 ## Required (one of)
@@ -16,6 +17,7 @@ python nanollama.py --batch-file FILE [--chat] [--model MODEL] [...]
 | `--prompt PROMPT` | The input text for the model to continue |
 | `--interactive` | Interactive REPL mode — type prompts, get responses, repeat. Implies `--chat` |
 | `--batch-file FILE` | File with one prompt per line for batched generation |
+| `--serve` | Start OpenAI-compatible API server instead of generating |
 
 ## Optional
 
@@ -33,6 +35,7 @@ python nanollama.py --batch-file FILE [--chat] [--model MODEL] [...]
 | `--dtype DTYPE` | `float32` | Model precision: `float32`, `float16`, or `bfloat16`. Half-precision halves memory and dramatically improves speed. Attention scores are always computed in float32 for numerical stability |
 | `--quantize Q` | none | Post-load weight quantization: `q8` (int8, ~4x memory savings) or `q4` (4-bit packed, ~8x savings). Weights are dequantized to float during each forward pass |
 | `--compile` | off | Use `torch.compile()` for automatic kernel fusion. First forward pass is slow (compilation), subsequent passes are faster |
+| `--port PORT` | `8000` | Server port (used with `--serve`) |
 
 ## Examples
 
@@ -130,6 +133,40 @@ Batched generation from a file (one prompt per line):
 
 ```bash
 python nanollama.py --batch-file prompts.txt --chat --dtype float16
+```
+
+Start the API server:
+
+```bash
+python nanollama.py --serve --dtype float16
+```
+
+Start the API server on a custom port:
+
+```bash
+python nanollama.py --serve --dtype float16 --port 3000
+```
+
+Test the API with curl:
+
+```bash
+# Chat completions
+curl http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"messages":[{"role":"user","content":"What is 2+2?"}],"max_tokens":50}'
+
+# Streaming
+curl http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"messages":[{"role":"user","content":"Hello"}],"stream":true}'
+
+# Text completions
+curl http://localhost:8000/v1/completions \
+  -H "Content-Type: application/json" \
+  -d '{"prompt":"The meaning of life is","max_tokens":30}'
+
+# List models
+curl http://localhost:8000/v1/models
 ```
 
 ## Output format
