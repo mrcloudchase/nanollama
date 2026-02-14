@@ -25,7 +25,7 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from huggingface_hub import scan_cache_dir, snapshot_download
+from huggingface_hub import hf_hub_download, scan_cache_dir, snapshot_download
 from safetensors.torch import load_file
 from transformers import AutoTokenizer
 
@@ -394,6 +394,7 @@ _GGUF_TENSOR_TYPES = {
     0: (32, 1),   # F32
     1: (16, 1),   # F16
     2: (4, 32),   # Q4_0: 2 + 16 bytes per 32 elements
+    3: (4, 32),   # Q4_1: 2 + 2 + 16 bytes per 32 elements (scale + min + data)
     8: (8, 32),   # Q8_0: 2 + 32 bytes per 32 elements
 }
 
@@ -448,12 +449,33 @@ def _dequant_q4_0(data, shape):
     blocks = np.frombuffer(data[:n_blocks * block_size], dtype=np.uint8).reshape(n_blocks, block_size)
     scales = blocks[:, :2].copy().view(np.float16).astype(np.float32)  # [n_blocks, 1]
     packed = blocks[:, 2:]  # [n_blocks, 16]
-    # Unpack: low nibble first, high nibble second
+    # Unpack: low nibbles → first 16 elements, high nibbles → last 16
     low = (packed & 0x0F).astype(np.float32) - 8.0
     high = (packed >> 4).astype(np.float32) - 8.0
-    # Interleave: for each byte, low nibble comes first
-    values = np.stack([low, high], axis=-1).reshape(n_blocks, 32)
+    values = np.concatenate([low, high], axis=-1)  # [n_blocks, 32]
     return (values * scales).reshape(shape)
+
+
+def _dequant_q4_1(data, shape):
+    """Dequantize Q4_1 blocks: 2-byte f16 scale + 2-byte f16 min + 16 packed uint8 per block.
+
+    Like Q4_0 but with an explicit minimum instead of a fixed -8 offset.
+    Formula: nibble * scale + min
+    """
+    block_size = 20  # 2 bytes scale + 2 bytes min + 16 bytes packed data
+    n_elements = 1
+    for d in shape:
+        n_elements *= d
+    n_blocks = n_elements // 32
+    blocks = np.frombuffer(data[:n_blocks * block_size], dtype=np.uint8).reshape(n_blocks, block_size)
+    scales = blocks[:, :2].copy().view(np.float16).astype(np.float32)  # [n_blocks, 1]
+    mins = blocks[:, 2:4].copy().view(np.float16).astype(np.float32)   # [n_blocks, 1]
+    packed = blocks[:, 4:]  # [n_blocks, 16]
+    # Unpack: low nibbles → first 16 elements, high nibbles → last 16
+    low = (packed & 0x0F).astype(np.float32)
+    high = (packed >> 4).astype(np.float32)
+    values = np.concatenate([low, high], axis=-1)  # [n_blocks, 32]
+    return (values * scales + mins).reshape(shape)
 
 
 def _map_gguf_name(name: str) -> str:
@@ -464,15 +486,18 @@ def _map_gguf_name(name: str) -> str:
     # Token embedding and output
     name = name.replace("token_embd", "embed_tokens")
     name = name.replace("output_norm", "norm")
-    name = name.replace("output.", "lm_head.")
     # Block prefix
     name = name.replace("blk.", "layers.")
-    # Attention
+    # Attention — replace .attn_output. BEFORE standalone output. to avoid
+    # "output." matching inside "attn_output." and producing wrong names
+    name = name.replace(".attn_output.", ".self_attn.o_proj.")
     name = name.replace(".attn_q.", ".self_attn.q_proj.")
     name = name.replace(".attn_k.", ".self_attn.k_proj.")
     name = name.replace(".attn_v.", ".self_attn.v_proj.")
-    name = name.replace(".attn_output.", ".self_attn.o_proj.")
     name = name.replace(".attn_norm.", ".input_layernorm.")
+    # lm_head — after attn_output is already handled
+    if name.startswith("output."):
+        name = "lm_head." + name[7:]
     # FFN
     name = name.replace(".ffn_gate.", ".mlp.gate_proj.")
     name = name.replace(".ffn_up.", ".mlp.up_proj.")
@@ -485,11 +510,25 @@ def load_gguf(path: str, device: str = "cpu", dtype: torch.dtype = torch.float32
               tokenizer_id: str | None = None):
     """Load a GGUF model file. Returns (model, tokenizer).
 
+    path can be a local file or a HuggingFace path like
+    'Qwen/Qwen2-0.5B-Instruct-GGUF/qwen2-0_5b-instruct-q4_0.gguf'.
     GGUF files don't contain tokenizer data usable by Python, so a HuggingFace
     tokenizer must be provided via tokenizer_id.
     """
     if tokenizer_id is None:
         raise ValueError("--tokenizer is required for GGUF files (GGUF doesn't include a Python-usable tokenizer)")
+
+    # Auto-download from HuggingFace if path isn't a local file
+    # Format: org/repo/filename.gguf → hf_hub_download("org/repo", "filename.gguf")
+    if not Path(path).exists() and "/" in path:
+        parts = path.split("/")
+        if len(parts) >= 3:
+            repo_id = "/".join(parts[:2])
+            filename = "/".join(parts[2:])
+            print(f"Downloading {filename} from {repo_id}...")
+            path = hf_hub_download(repo_id, filename)
+        else:
+            raise FileNotFoundError(f"GGUF file not found: {path}")
 
     with open(path, "rb") as f:
         # ── Header ────────────────────────────────────────────────────────
@@ -539,6 +578,12 @@ def load_gguf(path: str, device: str = "cpu", dtype: torch.dtype = torch.float32
             offset = struct.unpack("<Q", f.read(8))[0]
             tensor_infos.append((name, dims, tensor_type, offset))
 
+        # Infer vocab_size from embedding tensor (more reliable than metadata)
+        for name, dims, _, _ in tensor_infos:
+            if name == "token_embd.weight":
+                cfg.vocab_size = dims[-1]  # GGUF dims are reversed: [hidden, vocab]
+                break
+
         # ── Tensor data ───────────────────────────────────────────────────
         # Data section is aligned to 32 bytes from file start
         data_offset = f.tell()
@@ -566,6 +611,10 @@ def load_gguf(path: str, device: str = "cpu", dtype: torch.dtype = torch.float32
                 n_blocks = n_elements // 32
                 raw = f.read(n_blocks * 18)
                 arr = _dequant_q4_0(raw, shape)
+            elif tensor_type == 3:  # Q4_1
+                n_blocks = n_elements // 32
+                raw = f.read(n_blocks * 20)
+                arr = _dequant_q4_1(raw, shape)
             elif tensor_type == 8:  # Q8_0
                 n_blocks = n_elements // 32
                 raw = f.read(n_blocks * 34)
@@ -1169,6 +1218,7 @@ def cmd_rm(model_id: str):
 class Modelfile:
     """Parsed Modelfile contents."""
     model: str = ""
+    tokenizer: str = ""
     system: str = ""
     parameters: dict = field(default_factory=dict)
 
@@ -1176,7 +1226,8 @@ def parse_modelfile(path: str) -> Modelfile:
     """Parse a Modelfile from the given path.
 
     Supported directives:
-        FROM model_id          — HuggingFace model ID or local path
+        FROM model_id          — HuggingFace model ID or local path (.gguf or HF ID)
+        TOKENIZER model_id     — HuggingFace tokenizer (required for GGUF models)
         PARAMETER key value    — Sampling parameter (temperature, top_k, etc.)
         SYSTEM text            — System prompt for chat mode
     """
@@ -1191,6 +1242,8 @@ def parse_modelfile(path: str) -> Modelfile:
             value = parts[1] if len(parts) > 1 else ""
             if directive == "FROM":
                 mf.model = value
+            elif directive == "TOKENIZER":
+                mf.tokenizer = value
             elif directive == "SYSTEM":
                 mf.system = value
             elif directive == "PARAMETER":
@@ -1257,6 +1310,8 @@ if __name__ == "__main__":
         mf = parse_modelfile(args.modelfile)
         if mf.model:
             args.model = mf.model
+        if mf.tokenizer and not args.tokenizer:
+            args.tokenizer = mf.tokenizer
         if mf.system:
             args.system = mf.system
         # Map Modelfile PARAMETER names to argparse attributes
